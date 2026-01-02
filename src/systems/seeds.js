@@ -162,18 +162,36 @@ export function pickNearestSeed(state, x, y) {
   const W = state.canvas.width;
   const H = state.canvas.height;
   
-  let best = null;
-  let bestD = Infinity;
+  if (seeds.length === 0) return null;
+  
+  // Calculate weighted scores for all seeds
+  const candidates = [];
   for (const sd of seeds) {
     // Anticipation: target where it will land (groundY) while falling
     const sy = sd.landed ? sd.y : sd.groundY;
     const d = torusDist(x, y, sd.x, sy, W, H);
-    if (d < bestD) { 
-      bestD = d; 
-      best = sd; 
+    
+    // Weight closer seeds more heavily, but add randomness
+    // Closer seeds get higher weight (lower distance = higher weight)
+    const maxDistance = 300; // Maximum distance for weighting
+    const weight = Math.max(1, maxDistance - d);
+    
+    candidates.push({ seed: sd, weight: weight });
+  }
+  
+  // Weighted random selection
+  const totalWeight = candidates.reduce((sum, c) => sum + c.weight, 0);
+  let random = Math.random() * totalWeight;
+  
+  for (const candidate of candidates) {
+    random -= candidate.weight;
+    if (random <= 0) {
+      return candidate.seed;
     }
   }
-  return best;
+  
+  // Fallback (shouldn't happen but just in case)
+  return candidates[0].seed;
 }
 
 export function scatterSeeds(state, dt) {

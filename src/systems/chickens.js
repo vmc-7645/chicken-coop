@@ -75,14 +75,53 @@ export function initChickens(state, n) {
       y,
       vx: rand(-60, 60),
       vy: rand(-60, 60),
+      size,
+      role,
+      socialness: rand(0.2, 1.0),
+      wander: rand(CFG.WANDER * 0.5, CFG.WANDER * 1.5),
+      maxSpeed: CFG.MAX_SPEED * rand(0.8, 1.2),
+      maxFatigue: rand(25, 45),
+      fatigue: 0,
+      restPhase: 'none',
+      restT: 0,
+      noticeTimer: 0,
+      noticeDelay: rand(0.1, 0.3),
+      peckTimer: 0,
+      eyeX: 0,
+      eyeY: 0,
+      temperament: rand() < 0.5 ? 'calm' : 'nervous',
+      temperamentT: 0,
+      panicTimer: 0,
+      panicT: 0,
+      panicMode: 0,
+      panicX: 0,
+      panicY: 0,
+      panicCircleAmp: 0,
+      panicCircleFreq: 0,
+      panicCirclePhase: 0,
+      panicWaveAmp: 0,
+      panicWaveFreq: 0,
+      panicWavePhase: 0,
+      fleeTimer: 0,
+      fleeT: 0,
+      fleeTargetIdx: -1,
+      fleeX: 0,
+      fleeY: 0,
+      skidTimer: 0,
       tx: wrapPos(cx + rand(-W * 0.30, W * 0.30), W),
       ty: wrapPos(cy + rand(-H * 0.30, H * 0.30), H),
       nextTargetIn: rand(0.15, 0.8) * temperament.targetTempo,
 
-      seedId: null,
-      noticeTimer: 0,
-      skidTimer: 0,
-      peckTimer: 0,
+      eatState: 0,        // 0 none, 1 pause, 2 pecking
+      eatPauseT: 0,
+      eatPecksLeft: 0,
+      eatPeckT: 0,        // time until next peck pulse
+
+      // New natural behavior properties
+      wanderAngle: rand(0, Math.PI * 2),
+      pauseTimer: 0,
+      curiosityTimer: rand(0, 2),
+      personality: rand() < 0.33 ? 'curious' : (rand() < 0.5 ? 'cautious' : 'bold'),
 
       // zigzag
       zigzagPhase: rand(0, Math.PI * 2),
@@ -95,36 +134,8 @@ export function initChickens(state, n) {
       lastFlipReason: '',
 
       // panic run
-      panicTimer: 0,
-      panicMode: 0,         // 0 linear, 1 circular, 2 wavy, 3 toward chicken
-      panicT: 0,
-      panicX: x,
-      panicY: y,
-      panicCx: x,
-      panicCy: y,
-      panicR: 0,
-      panicOmega: 0,
-      panicWaveAmp: 0,
-      panicWaveFreq: 0,
       panicTargetIdx: -1,
 
-      // flee run
-      fleeTimer: 0,
-      fleeFromIdx: -1,
-      fleeX: x,
-      fleeY: y,
-
-      // fatigue system
-      fatigue: 0,
-      maxFatigue: rand(8.0, 15.0), // time until tired
-      restTimer: 0,
-      restPhase: 'none', // 'going' | 'inside' | 'none'
-
-      // eating state
-      eatState: 0,        // 0 none, 1 pause, 2 pecking
-      eatPauseT: 0,
-      eatPecksLeft: 0,
-      eatPeckT: 0,        // time until next peck pulse
 
       // startle
       startleCooldown: 0,

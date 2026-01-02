@@ -59,6 +59,10 @@ export function updateChickens(state, dt) {
   // Socialness + collision avoidance + flocking
   updateSocialForces(state, chasingArr, axArr, ayArr);
 
+  // Temporarily disable new behaviors to fix erratic movement
+  // updateNaturalBehaviors(state, dt, chasingArr);
+  // updatePersonalityBehaviors(state, dt, chasingArr);
+  
   // Main movement
   updateMovement(state, dt, axArr, ayArr, chasingArr, panickingArr, fleeingArr, targetSeedArr);
 
@@ -67,6 +71,55 @@ export function updateChickens(state, dt) {
 
   // Handle startle collisions
   handleStartleCollisions(state, hasAnySeed);
+  
+  // Check for coop evacuation conditions
+  updateCoopEvacuation(state, dt);
+}
+
+function updateCoopEvacuation(state, dt) {
+  const { chickens } = state;
+  
+  // Count currently panicked chickens
+  let panickedCount = 0;
+  for (const chicken of chickens) {
+    if (chicken.panicTimer > 0) {
+      panickedCount++;
+    }
+  }
+  
+  // Trigger evacuation if too many chickens are panicked
+  if (panickedCount >= CFG.PANIC_THRESHOLD && !state.coop.evacuated) {
+    state.coop.evacuated = true;
+    state.coop.evacuationTimer = CFG.COOP_EVACUATION_DURATION;
+    
+    // Force all chickens to flee away from coop
+    const circle = coopCollisionCircles(state);
+    for (const chicken of chickens) {
+      const dx = chicken.x - circle.centerX;
+      const dy = chicken.y - circle.centerY;
+      const distance = Math.hypot(dx, dy);
+      
+      // If chicken is near coop, force it away
+      if (distance < circle.outerRadius + 50) {
+        const angle = Math.atan2(dy, dx);
+        const fleeDistance = 150;
+        chicken.fleeX = chicken.x + Math.cos(angle) * fleeDistance;
+        chicken.fleeY = chicken.y + Math.sin(angle) * fleeDistance;
+        chicken.fleeTimer = 2.0;
+        chicken.panicTimer = 0; // Override panic with flee
+      }
+    }
+  }
+  
+  // Update evacuation timer
+  if (state.coop.evacuated) {
+    state.coop.evacuationTimer = Math.max(0, state.coop.evacuationTimer - dt);
+    
+    // Reset evacuation when timer expires
+    if (state.coop.evacuationTimer <= 0) {
+      state.coop.evacuated = false;
+    }
+  }
 }
 
 function respawnOne(state, entry) {
@@ -382,6 +435,93 @@ function updateSocialForces(state, chasingArr, axArr, ayArr) {
         axArr[j] -= nx * cf;
         ayArr[j] -= ny * cf;
       }
+    }
+  }
+}
+
+function updateNaturalBehaviors(state, dt, chasingArr) {
+  const { chickens } = state;
+  
+  for (let i = 0; i < chickens.length; i++) {
+    const s = chickens[i];
+    
+    // Only apply natural behaviors when not actively chasing or panicking
+    if (chasingArr[i] || s.panicTimer > 0 || s.restPhase !== 'none') continue;
+    
+    // Random direction changes for more organic wandering
+    if (Math.random() < CFG.WANDER_CHANGE_CHANCE) {
+      s.wanderAngle = rand(0, Math.PI * 2);
+    }
+    
+    // Occasional pauses to "look around"
+    if (Math.random() < CFG.RESTLESSNESS && s.pauseTimer <= 0) {
+      s.pauseTimer = CFG.PAUSE_DURATION;
+      s.wanderAngle = rand(0, Math.PI * 2);
+    }
+    
+    // Update pause timer
+    if (s.pauseTimer > 0) {
+      s.pauseTimer = Math.max(0, s.pauseTimer - dt);
+    }
+    
+    // Investigate interesting areas (curiosity) - much less frequent
+    if (Math.random() < 0.001) { // Reduced from 0.005
+      // Pick a random point within curiosity range
+      const angle = rand(0, Math.PI * 2);
+      const distance = rand(30, 80); // Reduced range
+      s.tx = s.x + Math.cos(angle) * distance;
+      s.ty = s.y + Math.sin(angle) * distance;
+    }
+  }
+}
+
+function updatePersonalityBehaviors(state, dt, chasingArr) {
+  const { chickens } = state;
+  
+  for (let i = 0; i < chickens.length; i++) {
+    const s = chickens[i];
+    
+    // Only apply personality behaviors when not actively chasing or panicking
+    if (chasingArr[i] || s.panicTimer > 0 || s.restPhase !== 'none') continue;
+    
+    // Personality-based movement modifications
+    if (s.personality === 'curious') {
+      // Curious chickens explore more and investigate things
+      if (Math.random() < 0.002) { // Reduced from 0.008
+        // Investigate random nearby point
+        const angle = rand(0, Math.PI * 2);
+        const distance = rand(20, 80); // Reduced range
+        s.tx = s.x + Math.cos(angle) * distance;
+        s.ty = s.y + Math.sin(angle) * distance;
+      }
+      // Slightly faster wandering (reduced)
+      s.wander *= 1.03;
+      
+    } else if (s.personality === 'cautious') {
+      // Cautious chickens move more slowly and pause more
+      if (Math.random() < 0.005) { // Reduced from 0.015
+        s.pauseTimer = CFG.PAUSE_DURATION * 1.2; // Reduced multiplier
+      }
+      // Slightly slower wandering (reduced)
+      s.wander *= 0.95;
+      
+    } else if (s.personality === 'bold') {
+      // Bold chickens move more confidently and take more direct paths
+      if (Math.random() < 0.004) { // Reduced from 0.012
+        // Make more decisive movements
+        const angle = rand(0, Math.PI * 2);
+        const distance = rand(40, 100); // Reduced range
+        s.tx = s.x + Math.cos(angle) * distance;
+        s.ty = s.y + Math.sin(angle) * distance;
+      }
+      // Slightly faster wandering (reduced)
+      s.wander *= 1.05;
+    }
+    
+    // Occasional personality changes (much rarer)
+    if (Math.random() < 0.0001) { // Reduced from 0.0005
+      const personalities = ['curious', 'cautious', 'bold'];
+      s.personality = personalities[Math.floor(Math.random() * personalities.length)];
     }
   }
 }

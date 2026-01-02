@@ -16,6 +16,8 @@ export function createState() {
       wall: CFG.COOP_WALL,
       doorW: CFG.COOP_DOOR_W,
       doorDepth: CFG.COOP_DOOR_DEPTH,
+      evacuated: false, // Coop evacuation state
+      evacuationTimer: 0, // Timer for evacuation duration
     },
     input: {
       mouseX: 0,

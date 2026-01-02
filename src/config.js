@@ -69,10 +69,10 @@ export const CFG = {
   ZIGZAG_AMP_CHASE: 0.25,
 
   // Collision avoidance
-  SEPARATION_DIST_CHASE: 18, // SIZE * 0.95 (SIZE is 18)
-  SEPARATION_DIST_WANDER: 27.9, // SIZE * 1.55
-  SEPARATION_STRENGTH_CHASE: 1200,
-  SEPARATION_STRENGTH_WANDER: 2200,
+  SEPARATION_DIST_CHASE: 25, // Increased from 18 to reduce clustering
+  SEPARATION_DIST_WANDER: 35, // Increased from 27.9 to reduce clustering
+  SEPARATION_STRENGTH_CHASE: 1800, // Increased from 1200
+  SEPARATION_STRENGTH_WANDER: 3000, // Increased from 2200
 
   // Socialness
   SOCIAL_RANGE: 155,
@@ -83,8 +83,8 @@ export const CFG = {
   FLOCK_RANGE: 175,
   ALIGN_STRENGTH: 0.35,
   COHESION_STRENGTH: 25,
-  PERSONAL_SPACE: 43.2, // SIZE * 2.4
-  PERSONAL_SPACE_STRENGTH: 650,
+  PERSONAL_SPACE: 55, // Increased from 43.2 to reduce clustering
+  PERSONAL_SPACE_STRENGTH: 900, // Increased from 650
 
   // Temperament flipping
   ISOLATED_NEIGHBOR_RADIUS: 150,
@@ -95,8 +95,18 @@ export const CFG = {
   TEMPERAMENT_COOLDOWN: 8.0,
 
   // Random mutations
-  MUTATION_CHANCE_PER_SEC: 0.010,
-  MUTATION_SCALE: 0.22,
+  MUTATION_CHANCE: 0.002,
+  MUTATION_STRENGTH: 0.2,
+
+  // Natural wandering behaviors
+  WANDER_CHANGE_CHANCE: 0.05, // Reduced from 0.02 - less frequent direction changes
+  CURIOUSITY_RANGE: 150, // Reduced from 200 - shorter investigation range
+  RESTLESSNESS: 0.03, // Reduced from 0.01 - less frequent wandering
+  PAUSE_DURATION: 0.8, // Reduced from 1.5 - shorter pauses
+
+  // Coop evacuation system
+  PANIC_THRESHOLD: 4, // Number of panicked chickens to trigger coop evacuation
+  COOP_EVACUATION_DURATION: 3.0, // How long coop stays empty during chaos
 
   // Random panic runs
   PANIC_CHANCE_PER_SEC: 0.006,
@@ -162,8 +172,8 @@ export const CFG = {
   PUFF_FEATHER_COUNT: [1, 2],
   PUFF_SPEED_DOWN: [80, 220],
   PUFF_SPEED_FEATHER: [60, 180],
-  PUFF_LIFE_DOWN: [0.5, 1.2],
-  PUFF_LIFE_FEATHER: [0.8, 1.8],
+  PUFF_LIFE_DOWN: [0.5, 0.7],
+  PUFF_LIFE_FEATHER: [0.8, 1.2],
   PUFF_BIAS: 0.75,
   PUFF_SPREAD: 0.9,
   PUFF_GRAV: 380,

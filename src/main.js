@@ -94,25 +94,17 @@ function step(state, dt) {
 
 function resize(state) {
   const canvas = document.getElementById('c');
+  const dpr = window.devicePixelRatio || 1;
   
-  const vw = Math.max(1, window.innerWidth);
-  const vh = Math.max(1, window.innerHeight);
-
-  const dpr = Math.max(1, Math.min(2.5, window.devicePixelRatio || 1));
-  const W = CFG.W;
-  const H = CFG.H;
-
-  canvas.style.width = W + 'px';
-  canvas.style.height = H + 'px';
-
-  canvas.width = Math.floor(W * dpr);
-  canvas.height = Math.floor(H * dpr);
-
-  const ctx = canvas.getContext('2d', { alpha: false });
-  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-
-  state.canvas.width = W;
-  state.canvas.height = H;
+  canvas.width = window.innerWidth * dpr;
+  canvas.height = window.innerHeight * dpr;
+  
+  canvas.style.width = window.innerWidth + 'px';
+  canvas.style.height = window.innerHeight + 'px';
+  
+  // Update state with new dimensions
+  state.canvas.width = window.innerWidth;
+  state.canvas.height = window.innerHeight;
   state.canvas.dpr = dpr;
 }
 
