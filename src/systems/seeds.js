@@ -1,7 +1,7 @@
 import { CFG } from "../config.js";
 import { rand } from "../util/rand.js";
 import { wrapPos, torusDist, torusDxDy } from "../util/torus.js";
-import { coopBodyContains, coopDoorInfo } from "./coop.js";
+import { coopBodyContains, coopDoorInfo, coopCollisionCircles } from "./coop.js";
 
 export function updateSeeds(state, dt) {
   const { seeds } = state;
@@ -35,6 +35,18 @@ export function updateSeeds(state, dt) {
       const fr = Math.pow(CFG.SEED_FRICTION, dt * 60);
       sd.vx *= fr;
       sd.vy *= fr;
+      
+      // Remove seeds that get too close to coop
+      const circle = coopCollisionCircles(state);
+      const dx = sd.x - circle.centerX;
+      const dy = sd.y - circle.centerY;
+      const distance = Math.hypot(dx, dy);
+      
+      // Remove seed if it's within the coop radius plus some buffer
+      if (distance < circle.outerRadius + 20) {
+        seeds.splice(i, 1);
+        continue;
+      }
     }
   }
 }
@@ -80,6 +92,11 @@ export function spawnSeed(state, x, y, opts = {}) {
     // Apply wrap after grid alignment
     const wrappedSx = wrapPos(sx, W);
     const wrappedGroundY = wrapPos(groundY, H);
+    
+    // Don't allow seeds to spawn on coop tiles
+    if (coopBodyContains(state, wrappedSx, wrappedGroundY)) {
+      continue; // Skip this seed
+    }
 
     // Start above local ground and fall down to it
     const startY = wrappedGroundY - rand(40, 140);
