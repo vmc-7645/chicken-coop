@@ -1,0 +1,1756 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Green Drift</title>
+  <style>
+    :root{
+      --green: #00a000;
+      --white: #ffffff;
+    }
+    html, body {
+      width: 100%;
+      height: 100%;
+      margin: 0;
+      padding: 0;
+      background: #000000;
+      overflow: hidden;
+      font-family: system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif;
+    }
+
+    .wrap{
+      width: 100%;
+      height: 100%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    canvas{
+      background: var(--green);
+      display: block;
+      image-rendering: pixelated;
+      touch-action: none;
+      width: 100vw;
+      height: 100vh;
+    }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <canvas id="c"></canvas>
+  </div>
+
+  <script type="module" src="src/main.js"></script>
+</body>
+</html>
+
+      // Coop geometry (axis-aligned, walls block; doorway on the "front" (bottom) allows entry/exit)
+      // Coop is intentionally SMALL + SQUARE.
+      const COOP_SIZE = 60;
+      const COOP_WALL = 8;
+      const COOP_DOOR_W = 26;
+      const COOP_DOOR_DEPTH = 12; // visual only (gap depth)
+      const COOP_OFFSET_Y = 0.10; // fraction of H downward from center
+      const COOP_PAD = 0.8;       // extra push to keep out of wall
+
+      // Chickens
+      const COUNT = 28;
+      const SIZE = 18;
+
+      // Visual roles
+      const P_CHICK = 0.22;
+      const P_ROOSTER = 0.14;
+      const CHICK_SIZE_DELTA = -2;
+      const ROOSTER_SIZE_DELTA = +2;
+
+      // Seed (feed)
+      const SEED_SIZE = 6;
+      
+      // Seed scatter (kicked outward when many chickens converge)
+      const SCATTER_RADIUS = 44;
+      const SCATTER_MIN_CHICKENS = 4;
+      const SCATTER_CHANCE_PER_SEC = 0.85;   // per seed when crowded
+      const SCATTER_IMPULSE_MIN = 55;
+      const SCATTER_IMPULSE_MAX = 130;
+      const SEED_FRICTION = 0.88;            // per second-ish damping for landed drift
+      const SEEDS_PER_DROP = 1; // reduced from 16 for more manageable seed stream
+      const SEED_SPREAD = 26;
+      const GRAVITY = 1200;
+      const SEED_EAT_TIME = 1.0;
+      const EAT_RADIUS = 14;
+
+      // Seed polish
+      const SEED_CLUSTERS = 3;
+      const SEED_CLUSTER_RADIUS = 16;
+      const PECK_TIME = 0.16;          // seconds of visible peck after a bite
+      const PECK_SLOW = 0.70;          // slow down while pecking
+      const PECK_JITTER = 0.80;        // pixel jitter while pecking
+
+      // Wander feel
+      const CENTER_PULL = 0.14;
+      const WANDER = 3.5; // increased from 2.2 for more activity
+      const DAMPING = 0.90;
+      const MAX_SPEED = 650; // increased from 520
+
+      // Impulses (wander only)
+      const IMPULSE_CHANCE = 0.18; // increased from 0.10 for more spontaneous movement
+      const IMPULSE_SCALE = 2.0;
+
+      // Reaction + chase
+      const REACTION_MAX = 10.0; // increased from 1.25 for up to 10 second notice delay
+      const CHASE_VEL_GAIN = 4.2;
+
+      // Zigzag motion
+      const ZIGZAG_FREQ_MIN = 1.2;
+      const ZIGZAG_FREQ_MAX = 3.5;
+      const ZIGZAG_AMP_WANDER = 0.35;
+      const ZIGZAG_AMP_CHASE = 0.25;
+
+      // Collision avoidance
+      const SEPARATION_DIST_CHASE = SIZE * 0.95;
+      const SEPARATION_DIST_WANDER = SIZE * 1.55;
+      const SEPARATION_STRENGTH_CHASE = 1200;
+      const SEPARATION_STRENGTH_WANDER = 2200;
+
+      // Socialness (only influences wandering)
+      const SOCIAL_RANGE = 155;
+      const SOCIAL_MIN = 42;
+      const SOCIAL_STRENGTH = 95;
+
+      // Simple flocking (wandering only)
+      const FLOCK_RANGE = 175;
+      const ALIGN_STRENGTH = 0.35;       // matches nearby velocity
+      const COHESION_STRENGTH = 25;      // gentle pull toward local center
+      const PERSONAL_SPACE = SIZE * 2.4; // soft bubble (in addition to hard separation)
+      const PERSONAL_SPACE_STRENGTH = 650;
+
+      // Temperament flipping ("too lonely" or "too crowded" -> swing the other way)
+      const ISOLATED_NEIGHBOR_RADIUS = 150;
+      const ISOLATED_FOR = 8.0;
+      const CLUSTER_RADIUS = 90;
+      const CLUSTER_NEIGHBORS = 5;
+      const CLUSTERED_FOR = 6.0;
+      const TEMPERAMENT_COOLDOWN = 8.0;
+
+      // Random spontaneous temperament changes (any metric)
+      const MUTATION_CHANCE_PER_SEC = 0.010;  // per chicken
+      const MUTATION_SCALE = 0.22;            // size of perturbation
+
+      // Random "panic runs" (sprints in a random direction)
+      // Now with styles: linear, circular, wavy, or toward another chicken.
+      const PANIC_CHANCE_PER_SEC = 0.006;     // per chicken
+      const PANIC_DURATION_MIN = 0.45;
+      const PANIC_DURATION_MAX = 1.15;
+      const PANIC_SPEED_MULT = 1.55;          // relative to normal chase
+
+      // Panic style mix
+      const PANIC_P_LINEAR = 0.40;
+      const PANIC_P_CIRCULAR = 0.22;
+      const PANIC_P_WAVY = 0.23;
+      const PANIC_P_TO_CHICKEN = 0.15;
+
+      // Circular panic
+      const PANIC_CIRCLE_RADIUS_MIN = 70;
+      const PANIC_CIRCLE_RADIUS_MAX = 180;
+      const PANIC_CIRCLE_OMEGA_MIN = 3.0;     // rad/s
+      const PANIC_CIRCLE_OMEGA_MAX = 7.5;
+
+      // Wavy panic
+      const PANIC_WAVE_AMP_MIN = 40;
+      const PANIC_WAVE_AMP_MAX = 120;
+      const PANIC_WAVE_FREQ_MIN = 3.0;        // rad/s
+      const PANIC_WAVE_FREQ_MAX = 10.0;
+
+      // Fleeing (if another chicken is sprinting toward you)
+      const FLEE_DETECT_RADIUS = 220;
+      const FLEE_DURATION_MIN = 0.40;
+      const FLEE_DURATION_MAX = 1.10;
+      const FLEE_TARGET_DIST_MIN = 160;
+      const FLEE_TARGET_DIST_MAX = 360;
+      const FLEE_SPEED_MULT = 1.35;
+
+      // Skid
+      const SKID_TRIGGER = 26;
+      const SKID_TIME_MIN = 0.12;
+      const SKID_TIME_MAX = 0.28;
+      const SKID_DAMPING = 0.97;
+
+      // Startle on collision ("ran over")
+      const RUN_STARTLE_SPEED = 340;           // px/s threshold to count as "running"
+      const STARTLE_COLLISION_DIST = SIZE * 2.2;
+      const STARTLE_COOLDOWN = 0.85;           // seconds
+      const STARTLE_IMPULSE = 520;             // px/s velocity kick when startled while food exists
+
+      // --- State ---
+      let W = 700, H = 700, dpr = 1;
+      let coop = { x: 0, y: 0, w: COOP_SIZE, h: COOP_SIZE, wall: COOP_WALL, doorW: COOP_DOOR_W, doorDepth: COOP_DOOR_DEPTH };
+      const respawns = []; // { t, chicken }
+      const squares = [];
+      const seeds = [];
+      const featherPuffs = []; // { x,y,vx,vy,life,life0, type:'down'|'feather', ang, angVel, size, settled }
+      let nextSeedId = 1;
+
+      // Feather puff system
+      const PUFF_DOWN_COUNT = [10, 18];
+      const PUFF_FEATHER_COUNT = [1, 2];
+      const PUFF_SPEED_DOWN = [80, 220];
+      const PUFF_SPEED_FEATHER = [60, 180];
+      const PUFF_LIFE_DOWN = [0.18, 0.45];
+      const PUFF_LIFE_FEATHER = [0.35, 0.85];
+      const PUFF_BIAS = 0.75;        // 0 no bias, 1 fully opposite source
+      const PUFF_SPREAD = 0.9;       // radians-ish around main direction
+      const PUFF_GRAV = 380;         // settle feel, not real gravity
+      const PUFF_DRAG = 0.90;        // dt scaled
+      const PUFF_SETTLE_SPEED = 18;  // below this speed -> settle
+      const PUFF_SETTLE_LIFE_MULT = 1.9; // fade slower once settled
+
+      function rand(a, b){ return a + Math.random() * (b - a); }
+      function clamp(v, a, b){ return Math.max(a, Math.min(b, v)); }
+      function wrapPos(v, size){
+        v = v % size;
+        if(v < 0) v += size;
+        return v;
+      }
+
+      function randInt(a, b){ return Math.floor(rand(a, b + 1)); }
+
+      function norm2(x, y){
+        const m = Math.hypot(x, y);
+        return m > 1e-6 ? { x: x / m, y: y / m } : { x: 1, y: 0 };
+      }
+
+      function rotate(x, y, ang){
+        const c = Math.cos(ang), s = Math.sin(ang);
+        return { x: x * c - y * s, y: x * s + y * c };
+      }
+
+      function computeCoop(){
+        // Small square coop, kept away from edges.
+        const base = Math.min(COOP_SIZE, Math.max(84, Math.min(W, H) * 0.14));
+        coop.w = base;
+        coop.h = base;
+        coop.wall = clamp(COOP_WALL, 6, 12);
+        coop.doorW = Math.min(COOP_DOOR_W, coop.w * 0.46);
+        coop.doorDepth = Math.min(COOP_DOOR_DEPTH, coop.wall + 10);
+        coop.x = W * 0.62;
+        coop.y = H * 0.33;
+        const pad = 18 + coop.w * 0.5;
+        coop.x = clamp(coop.x, pad, W - pad);
+        coop.y = clamp(coop.y, pad, H - pad);
+      }
+
+      function emitFeatherPuff(chX, chY, srcX, srcY){
+        // Direction away from source (torus-aware)
+        let dir = { x: rand(-1, 1), y: rand(-1, 1) };
+
+        if(srcX != null && srcY != null){
+          // vector from source -> chicken, so puff goes "away"
+          const v = torusDxDy(srcX, srcY, chX, chY);
+          dir = norm2(v.dx, v.dy);
+        } else {
+          dir = norm2(dir.x, dir.y);
+        }
+
+        // Add some randomness but keep bias
+        const jitter = norm2(rand(-1, 1), rand(-1, 1));
+        dir = norm2(
+          dir.x * PUFF_BIAS + jitter.x * (1 - PUFF_BIAS),
+          dir.y * PUFF_BIAS + jitter.y * (1 - PUFF_BIAS)
+        );
+
+        // Tiny white down particles
+        const nDown = randInt(PUFF_DOWN_COUNT[0], PUFF_DOWN_COUNT[1]);
+        for(let i = 0; i < nDown; i++){
+          const a = rand(-PUFF_SPREAD, PUFF_SPREAD);
+          const d2 = rotate(dir.x, dir.y, a);
+          const sp = rand(PUFF_SPEED_DOWN[0], PUFF_SPEED_DOWN[1]);
+          const life0 = rand(PUFF_LIFE_DOWN[0], PUFF_LIFE_DOWN[1]);
+
+          featherPuffs.push({
+            x: chX, y: chY,
+            vx: d2.x * sp + rand(-40, 40),
+            vy: d2.y * sp + rand(-40, 40),
+            life: life0, life0,
+            type: 'down',
+            ang: 0,
+            angVel: 0,
+            size: rand(1.0, 2.2),
+            settled: false,
+          });
+        }
+
+        // 1 to 2 larger tan feathers that spin
+        const nF = randInt(PUFF_FEATHER_COUNT[0], PUFF_FEATHER_COUNT[1]);
+        for(let i = 0; i < nF; i++){
+          const a = rand(-PUFF_SPREAD * 0.7, PUFF_SPREAD * 0.7);
+          const d2 = rotate(dir.x, dir.y, a);
+          const sp = rand(PUFF_SPEED_FEATHER[0], PUFF_SPEED_FEATHER[1]);
+          const life0 = rand(PUFF_LIFE_FEATHER[0], PUFF_LIFE_FEATHER[1]);
+
+          featherPuffs.push({
+            x: chX, y: chY,
+            vx: d2.x * sp + rand(-20, 20),
+            vy: d2.y * sp + rand(-20, 20),
+            life: life0, life0,
+            type: 'feather',
+            ang: rand(0, Math.PI * 2),
+            angVel: rand(-10, 10),
+            size: rand(3.5, 5.5),
+            settled: false,
+          });
+        }
+      }
+
+      function coopCollisionCircles(){
+        const radius = coop.w * 0.5; // Use width as the radius for a circular coop
+        const wallThickness = coop.wall;
+        const innerRadius = radius - wallThickness;
+        
+        return { 
+          centerX: coop.x, 
+          centerY: coop.y, 
+          outerRadius: radius, 
+          innerRadius: innerRadius,
+          wallThickness: wallThickness,
+          doorAngle: Math.PI * 0.5, // Door at bottom (90 degrees)
+          doorAngleWidth: coop.doorW / radius // Angular width of doorway
+        };
+      }
+
+      // Separate despawn and spawn zones
+      const DESPAWN_RADIUS = 20;
+      const SPAWN_RADIUS = 30;
+      const ZONE_SPACING = 50;
+
+      // Pathfinding around coop
+      const COOP_AVOID_RADIUS = 80; // distance at which chickens start avoiding coop
+      const COOP_AVOID_STRENGTH = 300; // how strongly they avoid the coop
+
+      // Fatigue system
+      const FATIGUE_RATE = 0.1; // much slower - chickens get tired after ~30-45 seconds of activity
+      const REST_DURATION_MIN = 15.0; // minimum seconds of rest when tired
+      const REST_DURATION_MAX = 30.0; // maximum seconds of rest when tired
+      const FATIGUE_RECOVERY_RATE = 2.0; // fatigue reduction per second while resting
+
+      function isInDespawnZone(x, y){
+        const circle = coopCollisionCircles();
+        const doorX = circle.centerX;
+        const doorY = circle.centerY + circle.outerRadius;
+        const v = torusDxDy(x, y, doorX, doorY);
+        return Math.hypot(v.dx, v.dy) < DESPAWN_RADIUS;
+      }
+
+      function isInSpawnZone(x, y){
+        const circle = coopCollisionCircles();
+        const dx = x - circle.centerX;
+        const dy = y - (circle.centerY + circle.outerRadius + ZONE_SPACING);
+        return Math.hypot(dx, dy) < SPAWN_RADIUS;
+      }
+
+      function getCoopAvoidanceForce(x, y){
+        const dx = x - coop.x;
+        const dy = y - coop.y;
+        const dist = Math.hypot(dx, dy);
+        
+        if(dist < COOP_AVOID_RADIUS && dist > 0){
+          // Push chicken away from coop center
+          const pushStrength = (1 - dist / COOP_AVOID_RADIUS) * COOP_AVOID_STRENGTH;
+          const nx = dx / dist;
+          const ny = dy / dist;
+          return { x: nx * pushStrength, y: ny * pushStrength };
+        }
+        return { x: 0, y: 0 };
+      }
+
+      function coopBodyContains(x, y){
+        const circle = coopCollisionCircles();
+        const dx = x - circle.centerX;
+        const dy = y - circle.centerY;
+        const dist = Math.hypot(dx, dy);
+        return dist < circle.innerRadius;
+      }
+
+      function coopDoorInfo(){
+        const circle = coopCollisionCircles();
+        return { 
+          outX: circle.centerX, 
+          outY: circle.centerY + circle.outerRadius + ZONE_SPACING + SPAWN_RADIUS + 10,
+          centerX: circle.centerX,
+          centerY: circle.centerY,
+          outerRadius: circle.outerRadius
+        };
+      }
+
+      function scheduleRespawn(chicken){
+        // Schedule respawn after rest period - chicken stays in coop
+        const restDuration = rand(REST_DURATION_MIN, REST_DURATION_MAX);
+        chicken.restPhase = 'inside';
+        chicken.restTimer = restDuration;
+        respawns.push({ t: restDuration, chicken });
+      }
+
+      function respawnOne(entry){
+        const s = entry.chicken;
+        const di = coopDoorInfo();
+        s.x = wrapPos(di.outX + rand(-10, 10), W);
+        s.y = wrapPos(di.outY + rand(-6, 6), H);
+
+        const ang = rand(Math.PI * 0.25, Math.PI * 0.75);
+        const sp = rand(120, 260);
+        s.vx = Math.cos(ang) * sp + rand(-40, 40);
+        s.vy = -Math.abs(Math.sin(ang) * sp) + rand(-30, 10);
+
+        s.tx = wrapPos(s.x + rand(-W * 0.20, W * 0.20), W);
+        s.ty = wrapPos(s.y + rand(-H * 0.20, H * 0.20), H);
+        s.nextTargetIn = rand(0.25, 1.4) * s.targetTempo;
+
+        s.seedId = null;
+        s.noticeTimer = s.noticeDelay;
+        s.skidTimer = 0;
+        s.peckTimer = 0;
+        s.panicTimer = 0;
+        s.panicMode = 0;
+        s.panicTargetIdx = -1;
+        s.panicT = 0;
+        s.fleeTimer = 0;
+        s.fleeFromIdx = -1;
+
+        // Reset fatigue system after "resting" in coop
+        s.fatigue = 0;
+        s.restPhase = 'none';
+        s.restTimer = 0;
+
+        squares.push(s);
+      }
+
+      function resolveCircleCircle(x1, y1, r1, x2, y2, r2){
+        const dx = x1 - x2;
+        const dy = y1 - y2;
+        const dist = Math.hypot(dx, dy);
+        const minDist = r1 + r2;
+        
+        if(dist >= minDist) return { x: x1, y: y1, hit: false };
+        
+        // Circles overlap, push first circle out
+        const push = minDist - dist;
+        const nx = dist > 0 ? dx / dist : 1;
+        const ny = dist > 0 ? dy / dist : 0;
+        
+        return { x: x1 + nx * push, y: y1 + ny * push, hit: true };
+      }
+
+      function resolveCoopCollision(s){
+        const r = s.size * 0.5;
+        const circle = coopCollisionCircles();
+        let x = s.x, y = s.y;
+
+        for(let k = 0; k < 3; k++){
+          // Check if chicken is inside the outer circle (coop boundary)
+          const dx = x - circle.centerX;
+          const dy = y - circle.centerY;
+          const dist = Math.hypot(dx, dy);
+          
+          // If outside the outer boundary, wrap around (toroidal world)
+          if(dist > circle.outerRadius + r){
+            x = wrapPos(x, W);
+            y = wrapPos(y, H);
+            break;
+          }
+          
+          // Check collision with circular walls (between inner and outer radius)
+          if(dist < circle.outerRadius - r && dist > circle.innerRadius + r){
+            // Check if chicken is at the door opening
+            const angle = Math.atan2(dy, dx);
+            let doorAngle = circle.doorAngle;
+            let normalizedAngle = angle;
+            
+            // Normalize angle to be in same range as door
+            while(normalizedAngle < doorAngle - circle.doorAngleWidth * 0.5) normalizedAngle += Math.PI * 2;
+            while(normalizedAngle > doorAngle + circle.doorAngleWidth * 0.5) normalizedAngle -= Math.PI * 2;
+            
+            // If not in door opening, treat as wall collision
+            if(Math.abs(normalizedAngle - doorAngle) > circle.doorAngleWidth * 0.5){
+              // Push chicken away from wall center
+              const pushDist = dist < (circle.outerRadius + circle.innerRadius) * 0.5 ? 
+                circle.innerRadius + r + COOP_PAD : 
+                circle.outerRadius - r - COOP_PAD;
+              const nx = dx / dist;
+              const ny = dy / dist;
+              x = circle.centerX + nx * pushDist;
+              y = circle.centerY + ny * pushDist;
+              
+              // Dampen velocity on collision
+              s.vx *= 0.82;
+              s.vy *= 0.82;
+            }
+          }
+          
+          // If inside inner radius (in coop), push out through door
+          if(dist < circle.innerRadius - r){
+            const nx = dx / dist;
+            const ny = dy / dist;
+            x = circle.centerX + nx * (circle.innerRadius + r + COOP_PAD);
+            y = circle.centerY + ny * (circle.innerRadius + r + COOP_PAD);
+            
+            s.vx *= 0.82;
+            s.vy *= 0.82;
+          }
+        }
+
+        s.x = wrapPos(x, W);
+        s.y = wrapPos(y, H);
+      }
+
+      function drawCoop(){
+        const circle = coopCollisionCircles();
+
+        // Draw outer circle (coop walls)
+        ctx.fillStyle = COOP_FILL;
+        ctx.beginPath();
+        ctx.arc(circle.centerX, circle.centerY, circle.outerRadius, 0, Math.PI * 2);
+        ctx.fill();
+
+        // Draw inner circle (coop interior)
+        ctx.fillStyle = GREEN;
+        ctx.beginPath();
+        ctx.arc(circle.centerX, circle.centerY, circle.innerRadius, 0, Math.PI * 2);
+        ctx.fill();
+
+        // Draw door opening (arc at bottom)
+        ctx.fillStyle = GREEN;
+        ctx.beginPath();
+        const doorStart = circle.doorAngle - circle.doorAngleWidth * 0.5;
+        const doorEnd = circle.doorAngle + circle.doorAngleWidth * 0.5;
+        ctx.arc(circle.centerX, circle.centerY, circle.outerRadius, doorStart, doorEnd);
+        ctx.arc(circle.centerX, circle.centerY, circle.innerRadius, doorEnd, doorStart, true);
+        ctx.closePath();
+        ctx.fill();
+
+        // Draw outline
+        ctx.strokeStyle = COOP_STROKE;
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.arc(circle.centerX, circle.centerY, circle.outerRadius, 0, Math.PI * 2);
+        ctx.stroke();
+      }
+
+      // Toroidal (wrap-around) distance helpers
+      function torusDelta(d, size){
+        d = ((d % size) + size) % size; // [0, size)
+        if(d > size * 0.5) d -= size;   // (-size/2, size/2]
+        return d;
+      }
+      function torusDxDy(ax, ay, bx, by){
+        return {
+          dx: torusDelta(bx - ax, W),
+          dy: torusDelta(by - ay, H)
+        };
+      }
+      function torusDist(ax, ay, bx, by){
+        const v = torusDxDy(ax, ay, bx, by);
+        return Math.hypot(v.dx, v.dy);
+      }
+
+      // --- Tiny test helper (runs once on load; logs only) ---
+      function assert(cond, msg){
+        if(!cond) throw new Error('Test failed: ' + msg);
+      }
+
+      function runTests(){
+        try{
+          resize();
+          assert(W > 0 && H > 0, 'resize sets positive W/H');
+
+          const td = torusDist(2, 10, W - 2, 10);
+          assert(td <= 6.1, 'torusDist wraps across x edge');
+
+          init();
+          assert(squares.length === COUNT, 'init creates COUNT chickens');
+          const s0 = squares[0];
+          assert(['chick','hen','rooster'].includes(s0.role), 'chicken has role');
+          assert(typeof s0.peckTimer === 'number', 'chicken has peckTimer');
+          assert(typeof s0.eyeX === 'number' && typeof s0.eyeY === 'number', 'chicken has eye offsets');
+
+          const before = seeds.length;
+          dropSeedAt(W * 0.5, H * 0.5);
+          assert(seeds.length === before + SEEDS_PER_DROP, 'dropSeedAt creates SEEDS_PER_DROP seeds');
+          const sd = seeds[seeds.length - 1];
+          assert(typeof sd.groundY === 'number', 'seed has groundY');
+          assert(sd.y <= sd.groundY, 'seed starts above or at its local ground');
+
+          // Nearest seed should respect torus (seed near right edge should be close to x=0)
+          seeds.length = 0;
+          seeds.push({ id: 1, x: W - 2, y: 100, vx: 0, vy: 0, landed: true, amount: 1, groundY: 100 });
+          const near = pickNearestSeed(2, 100);
+          assert(near && near.id === 1, 'pickNearestSeed uses torus distance');
+
+          // Anticipation: while falling, targeting should use groundY not current y
+          seeds.length = 0;
+          seeds.push({ id: 2, x: 200, y: -500, vx: 0, vy: 0, landed: false, amount: 1, groundY: 120 });
+          const near2 = pickNearestSeed(200, 120);
+          assert(near2 && near2.id === 2, 'pickNearestSeed uses groundY for falling seeds');
+
+          // Coop walls exist and are resolvable
+          computeCoop();
+          const circle = coopCollisionCircles();
+          assert(circle.outerRadius > 0, 'coopCollisionCircles returns valid radius');
+          const t0 = squares[0];
+          const oldX = t0.x, oldY = t0.y;
+          // Place chicken inside coop
+          t0.x = circle.centerX;
+          t0.y = circle.centerY;
+          resolveCoopCollision(t0);
+          // Chicken should have been moved out of the coop
+          const movedOut = Math.hypot(t0.x - circle.centerX, t0.y - circle.centerY) > circle.innerRadius + t0.size * 0.5;
+          assert(movedOut, 'resolveCoopCollision moves a chicken out of the coop');
+          t0.x = oldX; t0.y = oldY;
+
+          // Despawn/respawn from coop interior
+          const savedCount = squares.length;
+          const sX = squares[0];
+          sX.x = coop.x; sX.y = coop.y; // interior
+          scheduleRespawn(squares.pop());
+          assert(respawns.length === 1, 'scheduleRespawn enqueues');
+          respawns[0].t = 0;
+          step(0.0);
+          assert(respawns.length === 0, 'respawn processed');
+          assert(squares.length === savedCount, 'respawn restores count');
+
+          seeds.length = 0;
+        } catch (e){
+          console.error(e);
+        }
+      }
+
+      function resize(){
+        const vw = Math.max(1, window.innerWidth);
+        const vh = Math.max(1, window.innerHeight);
+
+        dpr = Math.max(1, Math.min(2.5, window.devicePixelRatio || 1));
+        W = 640; // Fixed width
+        H = 480; // Fixed height
+
+        canvas.style.width = W + 'px';
+        canvas.style.height = H + 'px';
+
+        canvas.width = Math.floor(W * dpr);
+        canvas.height = Math.floor(H * dpr);
+
+        ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+        computeCoop();
+      }
+
+      function chooseRole(){
+        const r = Math.random();
+        if(r < P_CHICK) return 'chick';
+        if(r < P_CHICK + P_ROOSTER) return 'rooster';
+        return 'hen';
+      }
+
+      function roleSizeDelta(role){
+        if(role === 'chick') return CHICK_SIZE_DELTA;
+        if(role === 'rooster') return ROOSTER_SIZE_DELTA;
+        return 0;
+      }
+
+      function init(){
+        squares.length = 0;
+        seeds.length = 0;
+        nextSeedId = 1;
+        respawns.length = 0;
+
+        const cx = W * 0.5;
+        const cy = H * 0.5;
+        const di = coopDoorInfo();
+
+        for(let i = 0; i < COUNT; i++){
+          const role = chooseRole();
+          const size = clamp(SIZE + roleSizeDelta(role), 10, 26);
+
+          const speediness = rand(0.75, 1.25) * (role === 'chick' ? 0.92 : (role === 'rooster' ? 1.08 : 1.0));
+          const wanderiness = rand(0.75, 1.45);
+          const patience = rand(0.7, 1.8);
+          const socialness = rand(-1.0, 1.0);
+
+          const temperament = {
+            wander: WANDER * rand(0.60, 1.55) * wanderiness,
+            centerPull: CENTER_PULL * rand(0.5, 1.35),
+            damping: clamp(DAMPING * rand(0.93, 1.02), 0.84, 0.95),
+            maxSpeed: MAX_SPEED * rand(0.65, 1.20) * speediness,
+            impulseChance: IMPULSE_CHANCE * rand(0.45, 2.2),
+            impulseScale: IMPULSE_SCALE * rand(0.7, 1.9),
+            targetSpread: rand(0.22, 0.48),
+            targetTempo: rand(0.80, 1.75),
+
+            chaseBoost: rand(2.2, 4.2) * speediness,
+            eatRate: rand(0.75, 1.5) * (role === 'chick' ? 1.05 : 1.0),
+
+            patience,
+            noticeDelay: rand(0.0, REACTION_MAX) * patience,
+
+            socialness
+          };
+
+          // Spawn OUTSIDE near the coop door so you never see chickens inside the coop.
+          const x = wrapPos(di.outX + rand(-30, 30), W);
+          const y = wrapPos(di.outY + rand(10, 70), H);
+
+          squares.push({
+            role,
+            size,
+            x,
+            y,
+            vx: rand(-60, 60),
+            vy: rand(-60, 60),
+            tx: wrapPos(cx + rand(-W * 0.30, W * 0.30), W),
+            ty: wrapPos(cy + rand(-H * 0.30, H * 0.30), H),
+            nextTargetIn: rand(0.15, 0.8) * temperament.targetTempo, // reduced from 0.25-1.8 for more frequent goal switching
+
+            seedId: null,
+            noticeTimer: 0,
+            skidTimer: 0,
+            peckTimer: 0,
+
+            // zigzag
+            zigzagPhase: rand(0, Math.PI * 2),
+            zigzagFreq: rand(ZIGZAG_FREQ_MIN, ZIGZAG_FREQ_MAX),
+
+            // social/cluster state
+            isolatedTime: 0,
+            clusteredTime: 0,
+            temperamentCooldown: 0,
+            lastFlipReason: '',
+
+            // panic run
+            panicTimer: 0,
+            panicMode: 0,         // 0 linear, 1 circular, 2 wavy, 3 toward chicken
+            panicT: 0,
+            panicX: x,
+            panicY: y,
+            panicCx: x,
+            panicCy: y,
+            panicR: 0,
+            panicOmega: 0,
+            panicWaveAmp: 0,
+            panicWaveFreq: 0,
+            panicTargetIdx: -1,
+
+            // flee run
+            fleeTimer: 0,
+            fleeFromIdx: -1,
+            fleeX: x,
+            fleeY: y,
+
+            // fatigue system
+            fatigue: 0,
+            maxFatigue: rand(8.0, 15.0), // time until tired
+            restTimer: 0,
+            restPhase: 'none', // 'going' | 'inside' | 'none'
+
+            // eating state
+            eatState: 0,        // 0 none, 1 pause, 2 pecking
+            eatPauseT: 0,
+            eatPecksLeft: 0,
+            eatPeckT: 0,        // time until next peck pulse
+
+            // startle
+            startleCooldown: 0,
+
+            // cached eye offset (updated at draw)
+            eyeX: 0,
+            eyeY: 0,
+
+            ...temperament
+          });
+        }
+      }
+
+      function snapshotTemperament(s){
+        return {
+          wander: +s.wander.toFixed(3),
+          centerPull: +s.centerPull.toFixed(3),
+          damping: +s.damping.toFixed(3),
+          maxSpeed: +s.maxSpeed.toFixed(3),
+          impulseChance: +s.impulseChance.toFixed(3),
+          impulseScale: +s.impulseScale.toFixed(3),
+          targetSpread: +s.targetSpread.toFixed(3),
+          targetTempo: +s.targetTempo.toFixed(3),
+          chaseBoost: +s.chaseBoost.toFixed(3),
+          eatRate: +s.eatRate.toFixed(3),
+          patience: +s.patience.toFixed(3),
+          noticeDelay: +s.noticeDelay.toFixed(3),
+          socialness: +s.socialness.toFixed(3),
+          zigzagFreq: +s.zigzagFreq.toFixed(3)
+        };
+      }
+
+      function mutateTemperament(s){
+        const metrics = [
+          'wander','centerPull','damping','maxSpeed','impulseChance','impulseScale',
+          'targetSpread','targetTempo','chaseBoost','eatRate','patience','socialness','zigzagFreq'
+        ];
+        const k = Math.floor(rand(1, 3.999));
+
+        for(let i = 0; i < k; i++){
+          const m = metrics[Math.floor(Math.random() * metrics.length)];
+          const r = (Math.random() * 2 - 1) * MUTATION_SCALE;
+
+          if(m === 'damping'){
+            s.damping = clamp(s.damping + r * 0.10, 0.82, 0.97);
+          } else if(m === 'centerPull'){
+            s.centerPull = clamp(s.centerPull + r * 0.35, 0.02, 0.45);
+          } else if(m === 'wander'){
+            s.wander = clamp(s.wander * (1 + r), 0.6, 6.0);
+          } else if(m === 'maxSpeed'){
+            s.maxSpeed = clamp(s.maxSpeed * (1 + r), 180, 900);
+          } else if(m === 'impulseChance'){
+            s.impulseChance = clamp(s.impulseChance * (1 + r), 0.01, 0.35);
+          } else if(m === 'impulseScale'){
+            s.impulseScale = clamp(s.impulseScale * (1 + r), 0.4, 4.0);
+          } else if(m === 'targetSpread'){
+            s.targetSpread = clamp(s.targetSpread * (1 + r), 0.14, 0.65);
+          } else if(m === 'targetTempo'){
+            s.targetTempo = clamp(s.targetTempo * (1 + r), 0.55, 2.4);
+          } else if(m === 'chaseBoost'){
+            s.chaseBoost = clamp(s.chaseBoost * (1 + r), 0.9, 7.0);
+          } else if(m === 'eatRate'){
+            s.eatRate = clamp(s.eatRate * (1 + r), 0.35, 2.5);
+          } else if(m === 'patience'){
+            s.patience = clamp(s.patience * (1 + r), 0.55, 2.4);
+            s.noticeDelay = clamp(rand(0.0, REACTION_MAX) * s.patience, 0, REACTION_MAX * 2.2);
+          } else if(m === 'socialness'){
+            s.socialness = clamp(s.socialness + r * 1.6, -1, 1);
+          } else if(m === 'zigzagFreq'){
+            s.zigzagFreq = clamp(s.zigzagFreq * (1 + r), 0.6, 6.0);
+          }
+        }
+
+        if(Math.random() < 0.4){
+          s.nextTargetIn = 0;
+        }
+      }
+
+      function triggerFlee(victim, pursuer){
+        // True torus "away" direction from pursuer -> victim
+        const vv = torusDxDy(pursuer.x, pursuer.y, victim.x, victim.y);
+        const d = Math.hypot(vv.dx, vv.dy) || 1;
+        const ux = vv.dx / d;
+        const uy = vv.dy / d;
+
+        const dist = rand(FLEE_TARGET_DIST_MIN, FLEE_TARGET_DIST_MAX);
+        victim.fleeTimer = rand(FLEE_DURATION_MIN, FLEE_DURATION_MAX);
+        victim.fleeFromIdx = squares.indexOf(pursuer);
+
+        victim.fleeX = wrapPos(victim.x + ux * dist + rand(-40, 40), W);
+        victim.fleeY = wrapPos(victim.y + uy * dist + rand(-40, 40), H);
+
+        // Flee overrides the victim's panic
+        victim.panicTimer = 0;
+        victim.panicMode = 0;
+        victim.panicTargetIdx = -1;
+        victim.panicT = 0;
+
+        victim.tx = victim.fleeX;
+        victim.ty = victim.fleeY;
+        victim.nextTargetIn = 999;
+      }
+
+      function triggerPanic(s){
+        s.panicTimer = rand(PANIC_DURATION_MIN, PANIC_DURATION_MAX);
+        s.panicT = 0;
+
+        const r = Math.random();
+        const p0 = PANIC_P_LINEAR;
+        const p1 = p0 + PANIC_P_CIRCULAR;
+        const p2 = p1 + PANIC_P_WAVY;
+        if(r < p0) s.panicMode = 0;
+        else if(r < p1) s.panicMode = 1;
+        else if(r < p2) s.panicMode = 2;
+        else s.panicMode = 3;
+
+        // Default target
+        s.panicX = wrapPos(s.x + rand(-W * 0.55, W * 0.55), W);
+        s.panicY = wrapPos(s.y + rand(-H * 0.55, H * 0.55), H);
+
+        // Circular params
+        s.panicCx = s.x;
+        s.panicCy = s.y;
+        s.panicR = rand(PANIC_CIRCLE_RADIUS_MIN, PANIC_CIRCLE_RADIUS_MAX);
+        s.panicOmega = (Math.random() < 0.5 ? -1 : 1) * rand(PANIC_CIRCLE_OMEGA_MIN, PANIC_CIRCLE_OMEGA_MAX);
+
+        // Wavy params
+        s.panicWaveAmp = rand(PANIC_WAVE_AMP_MIN, PANIC_WAVE_AMP_MAX);
+        s.panicWaveFreq = rand(PANIC_WAVE_FREQ_MIN, PANIC_WAVE_FREQ_MAX);
+
+        // Toward-chicken target
+        if(s.panicMode === 3){
+          if(squares.length <= 1){
+            s.panicMode = 0;
+            s.panicTargetIdx = -1;
+          } else {
+            let best = -1;
+            let bestScore = -Infinity;
+            for(let tries = 0; tries < 6; tries++){
+              const idx = Math.floor(Math.random() * squares.length);
+              if(squares[idx] === s) continue;
+              const o = squares[idx];
+              const d = torusDist(s.x, s.y, o.x, o.y);
+              const score = -d + rand(-40, 40);
+              if(score > bestScore){ bestScore = score; best = idx; }
+            }
+            if(best < 0){
+              let idx = Math.floor(Math.random() * squares.length);
+              if(squares[idx] === s) idx = (idx + 1) % squares.length;
+              best = idx;
+            }
+            s.panicTargetIdx = best;
+          }
+        } else {
+          s.panicTargetIdx = -1;
+        }
+      }
+
+      function startleChicken(s, hasAnySeed, srcX = null, srcY = null){
+        if(s.startleCooldown > 0) return;
+        s.startleCooldown = STARTLE_COOLDOWN;
+
+        emitFeatherPuff(s.x, s.y, srcX, srcY);
+
+        // If food exists, keep them on-task but add a quick jolt + skid
+        if(hasAnySeed){
+          s.vx += rand(-1, 1) * STARTLE_IMPULSE;
+          s.vy += rand(-1, 1) * STARTLE_IMPULSE;
+          s.skidTimer = Math.max(s.skidTimer, rand(SKID_TIME_MIN, SKID_TIME_MAX));
+          return;
+        }
+
+        triggerPanic(s);
+        s.panicTimer = Math.min(s.panicTimer, rand(0.25, 0.60));
+      }
+
+      function findSeedById(id){
+        if(!id) return null;
+        for(const sd of seeds){
+          if(sd.id === id) return sd;
+        }
+        return null;
+      }
+
+      function pickNearestSeed(x, y){
+        let best = null;
+        let bestD = Infinity;
+        for(const sd of seeds){
+          // Anticipation: target where it will land (groundY) while falling
+          const sy = sd.landed ? sd.y : sd.groundY;
+          const d = torusDist(x, y, sd.x, sy);
+          if(d < bestD){ bestD = d; best = sd; }
+        }
+        return best;
+      }
+
+      function dropSeedAt(boardX, boardY){
+        // Limit to max 100 seeds on screen
+        if(seeds.length >= 100) return;
+        
+        let x0 = wrapPos(boardX, W);
+        let y0 = wrapPos(boardY, H);
+
+        // If you click inside the coop, drop the seed just outside the door instead.
+        if(coopBodyContains(x0, y0)){
+          const di = coopDoorInfo();
+          x0 = wrapPos(di.outX + rand(-18, 18), W);
+          y0 = wrapPos(di.outY + rand(18, 60), H);
+        }
+
+        // Pick a few cluster centers near the click, grid-aligned
+        const centers = [];
+        for(let k = 0; k < SEED_CLUSTERS; k++){
+          const cx = Math.round((x0 + rand(-SEED_SPREAD, SEED_SPREAD)) / SEED_SIZE) * SEED_SIZE;
+          const cy = Math.round((y0 + rand(-SEED_SPREAD, SEED_SPREAD)) / SEED_SIZE) * SEED_SIZE;
+          centers.push({
+            x: wrapPos(cx, W),
+            y: wrapPos(cy, H)
+          });
+        }
+
+        for(let i = 0; i < SEEDS_PER_DROP; i++){
+          const c = centers[Math.floor(Math.random() * centers.length)];
+          // triangular-ish distribution around the cluster center, grid-aligned
+          const ox = Math.round(((rand(-1, 1) + rand(-1, 1) + rand(-1, 1)) / 3) * SEED_CLUSTER_RADIUS / SEED_SIZE) * SEED_SIZE;
+          const oy = Math.round(((rand(-1, 1) + rand(-1, 1) + rand(-1, 1)) / 3) * SEED_CLUSTER_RADIUS / SEED_SIZE) * SEED_SIZE;
+
+          const sx = c.x + ox;
+          const groundY = c.y + oy;
+          
+          // Apply wrap after grid alignment
+          const wrappedSx = wrapPos(sx, W);
+          const wrappedGroundY = wrapPos(groundY, H);
+
+          // Start above local ground and fall down to it
+          const startY = groundY - rand(40, 140);
+
+          seeds.push({
+            id: nextSeedId++,
+            x: wrappedSx,
+            y: startY,
+            vx: rand(-50, 50),
+            vy: rand(-40, 40),
+            landed: false,
+            amount: 1.0,
+            groundY: wrappedGroundY
+          });
+        }
+
+        for(const s of squares){
+          s.eatState = 0;
+          s.eatPauseT = 0;
+          s.eatPecksLeft = 0;
+          s.eatPeckT = 0;
+          s.noticeTimer = s.noticeDelay;
+          s.skidTimer = 0;
+          s.peckTimer = 0;
+          // food overrides panic
+          s.panicTimer = 0;
+          s.panicMode = 0;
+          s.panicTargetIdx = -1;
+          s.panicT = 0;
+          // food overrides flee
+          s.fleeTimer = 0;
+          s.fleeFromIdx = -1;
+        }
+      }
+
+      function flipTemperament(s, reason){
+        s.socialness = clamp(-s.socialness, -1, 1);
+
+        const newPat = clamp(1.6 - s.patience, 0.7, 1.8);
+        s.patience = newPat;
+        s.noticeDelay = clamp(rand(0.0, REACTION_MAX) * s.patience, 0, REACTION_MAX * 2.2);
+
+        if(reason === 'clustered'){
+          s.wander = clamp(s.wander * 1.18, 0.6, 5.5);
+          s.targetSpread = clamp(s.targetSpread * 1.12, 0.18, 0.60);
+          s.targetTempo = clamp(s.targetTempo * 0.92, 0.60, 2.2);
+        } else {
+          s.wander = clamp(s.wander * 0.92, 0.6, 5.5);
+          s.targetSpread = clamp(s.targetSpread * 0.92, 0.18, 0.60);
+          s.targetTempo = clamp(s.targetTempo * 1.06, 0.60, 2.2);
+        }
+
+        s.temperamentCooldown = TEMPERAMENT_COOLDOWN;
+        s.isolatedTime = 0;
+        s.clusteredTime = 0;
+        s.lastFlipReason = reason;
+      }
+
+      function step(dt){
+        const cx = W * 0.5;
+        const cy = H * 0.5;
+
+        // Respawns (chickens "come out" of the coop door)
+        for(let i = respawns.length - 1; i >= 0; i--){
+          respawns[i].t -= dt;
+          if(respawns[i].t <= 0){
+            const entry = respawns[i];
+            respawns.splice(i, 1);
+            respawnOne(entry);
+          }
+        }
+
+        // Update seeds
+        for(let i = seeds.length - 1; i >= 0; i--){
+          const sd = seeds[i];
+          if(!sd.landed){
+            sd.vy += GRAVITY * dt;
+            sd.x = wrapPos(sd.x + sd.vx * dt, W);
+            sd.y += sd.vy * dt;
+
+            sd.vx *= 0.995;
+            sd.vy *= 0.995;
+
+            // land on local groundY (may be anywhere in [0,H))
+            if(sd.y >= sd.groundY){
+              sd.y = sd.groundY;
+              sd.vx *= 0.15;
+              sd.vy = 0;
+              sd.landed = true;
+            }
+          } else {
+            // Landed seeds can slide a bit due to "kicks" (scatter)
+            sd.x = wrapPos(sd.x + sd.vx * dt, W);
+            sd.y = wrapPos(sd.y + sd.vy * dt, H);
+            sd.groundY = sd.y;
+
+            // friction
+            const fr = Math.pow(SEED_FRICTION, dt * 60);
+            sd.vx *= fr;
+            sd.vy *= fr;
+          }
+        }
+
+        const hasAnySeed = seeds.length > 0;
+
+        // Feather puffs update
+        for(let i = featherPuffs.length - 1; i >= 0; i--){
+          const p = featherPuffs[i];
+
+          // fade timing changes once settled
+          const lifeRate = p.settled ? (1 / PUFF_SETTLE_LIFE_MULT) : 1;
+          p.life -= dt * lifeRate;
+          if(p.life <= 0){ featherPuffs.splice(i, 1); continue; }
+
+          // motion
+          const drag = Math.pow(PUFF_DRAG, dt * 60);
+          p.vx *= drag;
+          p.vy *= drag;
+
+          // "settle" feel: a mild downward pull only while moving
+          if(!p.settled){
+            p.vy += PUFF_GRAV * dt;
+          }
+
+          p.x = wrapPos(p.x + p.vx * dt, W);
+          p.y = wrapPos(p.y + p.vy * dt, H);
+
+          if(p.type === 'feather' && !p.settled){
+            p.ang += p.angVel * dt;
+            p.angVel *= Math.pow(0.86, dt * 60);
+          }
+
+          const sp = Math.hypot(p.vx, p.vy);
+          if(!p.settled && sp < PUFF_SETTLE_SPEED){
+            p.settled = true;
+            p.vx = 0;
+            p.vy = 0;
+            p.angVel = 0;
+          }
+        }
+
+        // Precompute accel so we can add pairwise forces
+        const axArr = new Array(squares.length).fill(0);
+        const ayArr = new Array(squares.length).fill(0);
+        const chasingArr = new Array(squares.length).fill(false);
+        const targetSeedArr = new Array(squares.length).fill(null);
+        const panickingArr = new Array(squares.length).fill(false);
+        const fleeingArr = new Array(squares.length).fill(false);
+
+        // Decide targets (food > panic > wander). Fleeing is computed in a follow-up pass.
+        for(let i = 0; i < squares.length; i++){
+          const s = squares[i];
+          if(s.startleCooldown > 0) s.startleCooldown = Math.max(0, s.startleCooldown - dt);
+          if(s.peckTimer > 0) s.peckTimer = Math.max(0, s.peckTimer - dt);
+
+          if(Math.random() < MUTATION_CHANCE_PER_SEC * dt){
+            mutateTemperament(s);
+          }
+
+          if(s.panicTimer <= 0 && !hasAnySeed && Math.random() < PANIC_CHANCE_PER_SEC * dt){
+            triggerPanic(s);
+          }
+
+          if(s.noticeTimer > 0) s.noticeTimer = Math.max(0, s.noticeTimer - dt);
+          if(s.panicTimer > 0) {
+            const wasPanicking = true;
+            s.panicTimer = Math.max(0, s.panicTimer - dt);
+            s.panicT += dt;
+
+            if(s.panicTimer === 0){
+              s.nextTargetIn = 0; // replan immediately after panic
+            }
+          }
+          if(s.fleeTimer > 0) {
+            s.fleeTimer = Math.max(0, s.fleeTimer - dt);
+          }
+
+          // Update fatigue system
+          if(s.restPhase === 'inside' && s.restTimer > 0){
+            s.restTimer = Math.max(0, s.restTimer - dt);
+            s.fatigue = Math.max(0, s.fatigue - FATIGUE_RECOVERY_RATE * dt);
+            
+            // Done resting
+            if(s.restTimer <= 0){
+              s.restPhase = 'none';
+              s.fatigue = 0;
+              s.nextTargetIn = 0; // immediately choose new target
+            }
+          }
+
+          // Check if chicken should go to coop (immediate override)
+          const tired = (s.panicTimer <= 0 && s.restPhase === 'none' && s.fatigue >= s.maxFatigue * 0.9);
+          if(tired || s.restPhase === 'going'){
+            // Don't despawn immediately - force chicken to walk to coop
+            const circle = coopCollisionCircles();
+            
+            // point just outside the door (below the coop)
+            const doorOuterX = circle.centerX;
+            const doorOuterY = circle.centerY + circle.outerRadius + 10;
+
+            const M = 24; // bypass margin
+
+            // If we're "behind" coop (above it) and lined up in X, go around a side first.
+            if(s.y < circle.centerY - M && Math.abs(s.x - circle.centerX) < circle.outerRadius + M){
+              const leftX = circle.centerX - circle.outerRadius - M;
+              const rightX = circle.centerX + circle.outerRadius + M;
+              const goRight = (s.x > circle.centerX);
+              s.tx = goRight ? rightX : leftX;
+              s.ty = circle.centerY; // slide to the side
+            } else {
+              s.tx = doorOuterX;
+              s.ty = doorOuterY;
+            }
+
+            s.nextTargetIn = 999; // prevent re-targeting
+            s.seedId = null;
+            s.restPhase = 'going';
+            if(tired){
+              // Chicken is tired, heading to coop
+            }
+          } else if(!s.isResting && s.panicTimer <= 0 && s.restPhase === 'none'){
+            // Accumulate fatigue when active (but not when eating or panicking)
+            s.fatigue = Math.min(s.maxFatigue, s.fatigue + FATIGUE_RATE * dt);
+            if(s.fatigue >= s.maxFatigue * 0.9){
+            }
+          }
+
+          let targetSeed = null;
+
+          // Only look for seeds if not going to coop
+          if(s.restPhase !== 'going' && hasAnySeed && s.noticeTimer <= 0 && s.restPhase === 'none' && s.fatigue < s.maxFatigue * 0.9){
+            targetSeed = findSeedById(s.seedId);
+            if(!targetSeed){
+              targetSeed = pickNearestSeed(s.x, s.y);
+              s.seedId = targetSeed ? targetSeed.id : null;
+            }
+            
+            // Set target to seed location
+            if(targetSeed){
+              s.tx = targetSeed.x;
+              s.ty = targetSeed.landed ? targetSeed.y : targetSeed.groundY;
+              s.nextTargetIn = 999; // prevent re-targeting while chasing seed
+            }
+          }
+
+          const isPanicking = (s.panicTimer > 0);
+
+          if(!targetSeed && !isPanicking && s.restPhase !== 'going'){
+            s.seedId = null;
+            s.nextTargetIn -= dt;
+            if(s.nextTargetIn <= 0){
+              // Check if chicken is tired and should go to coop
+              if(s.fatigue >= s.maxFatigue * 0.9 && s.restPhase === 'none'){
+                // Go to coop to rest
+                // Target the despawn zone (right at the door) instead of spawn zone
+                const circle = coopCollisionCircles();
+                s.tx = circle.centerX;
+                s.ty = circle.centerY + circle.outerRadius;
+                s.nextTargetIn = 999;
+                s.restPhase = 'going';
+              } else {
+                // Normal wandering
+                const gx = (rand(-1,1) + rand(-1,1) + rand(-1,1)) / 3;
+                const gy = (rand(-1,1) + rand(-1,1) + rand(-1,1)) / 3;
+                s.tx = wrapPos(cx + gx * W * s.targetSpread, W);
+                s.ty = wrapPos(cy + gy * H * s.targetSpread, H);
+                s.nextTargetIn = rand(0.25, 1.9) * s.targetTempo;
+              }
+            }
+          }
+
+          // directed behaviors: seed chase, panic, going-to-coop (flee gets OR'd in later)
+          const chasing = !!targetSeed || isPanicking || (s.restPhase === 'going');
+
+          targetSeedArr[i] = targetSeed;
+          panickingArr[i] = isPanicking;
+          chasingArr[i] = chasing;
+        }
+
+        // Pass 2: detect if someone is running toward you (panic mode 3), then flee.
+        for(let i = 0; i < squares.length; i++){
+          const victim = squares[i];
+          if(hasAnySeed) { victim.fleeTimer = 0; continue; }
+          if(victim.fleeTimer > 0) continue;
+
+          let bestJ = -1;
+          let bestD = Infinity;
+          for(let j = 0; j < squares.length; j++){
+            if(i === j) continue;
+            const pursuer = squares[j];
+            if(!(panickingArr[j] && pursuer.panicMode === 3 && pursuer.panicTargetIdx === i)) continue;
+            const d = torusDist(pursuer.x, pursuer.y, victim.x, victim.y);
+            if(d < bestD){ bestD = d; bestJ = j; }
+          }
+
+          if(bestJ >= 0 && bestD <= FLEE_DETECT_RADIUS){
+            triggerFlee(victim, squares[bestJ]);
+          }
+        }
+
+        // Apply fleeing targets and recompute chasing flags
+        for(let i = 0; i < squares.length; i++){
+          const s = squares[i];
+          const isFleeing = (s.fleeTimer > 0);
+          if(isFleeing){
+            s.tx = s.fleeX;
+            s.ty = s.fleeY;
+            s.nextTargetIn = 999;
+          }
+          fleeingArr[i] = isFleeing;
+          chasingArr[i] = chasingArr[i] || isFleeing;
+        }
+
+        // Temperament timers (only while wandering)
+        for(let i = 0; i < squares.length; i++){
+          const s = squares[i];
+          if(s.temperamentCooldown > 0) s.temperamentCooldown = Math.max(0, s.temperamentCooldown - dt);
+
+          if(!chasingArr[i]){
+            let neighIso = 0;
+            let neighCluster = 0;
+            for(let j = 0; j < squares.length; j++){
+              if(i === j) continue;
+              const o = squares[j];
+              const d = torusDist(s.x, s.y, o.x, o.y);
+              if(d < ISOLATED_NEIGHBOR_RADIUS) neighIso++;
+              if(d < CLUSTER_RADIUS) neighCluster++;
+            }
+
+            if(neighIso === 0) s.isolatedTime += dt; else s.isolatedTime = 0;
+            if(neighCluster >= CLUSTER_NEIGHBORS) s.clusteredTime += dt; else s.clusteredTime = 0;
+
+            if(s.temperamentCooldown <= 0){
+              if(s.isolatedTime >= ISOLATED_FOR){
+                flipTemperament(s, 'isolated');
+              } else if(s.clusteredTime >= CLUSTERED_FOR){
+                flipTemperament(s, 'clustered');
+              }
+            }
+          } else {
+            s.isolatedTime = 0;
+            s.clusteredTime = 0;
+          }
+        }
+
+        // Socialness + collision avoidance + flocking
+        // Note: all deltas use torusDxDy.
+        for(let i = 0; i < squares.length; i++){
+          for(let j = i + 1; j < squares.length; j++){
+            const a = squares[i];
+            const b = squares[j];
+            const chasingPair = (chasingArr[i] || chasingArr[j]);
+
+            const v = torusDxDy(a.x, a.y, b.x, b.y);
+            let dx = v.dx;
+            let dy = v.dy;
+            let d = Math.hypot(dx, dy);
+            if(d < 0.0001){
+              dx = rand(-1,1);
+              dy = rand(-1,1);
+              d = Math.hypot(dx, dy);
+            }
+            const nx = dx / d;
+            const ny = dy / d;
+
+            // Hard separation
+            const sepDist = chasingPair ? SEPARATION_DIST_CHASE : SEPARATION_DIST_WANDER;
+            const sepStrength = chasingPair ? SEPARATION_STRENGTH_CHASE : SEPARATION_STRENGTH_WANDER;
+            if(d < sepDist){
+              const push = (sepDist - d) / sepDist;
+              const f = sepStrength * push;
+              axArr[i] -= nx * f;
+              ayArr[i] -= ny * f;
+              axArr[j] += nx * f;
+              ayArr[j] += ny * f;
+              continue;
+            }
+
+            // Soft personal space bubble (wandering only)
+            if(!chasingArr[i] && !chasingArr[j] && d < PERSONAL_SPACE){
+              const push = (PERSONAL_SPACE - d) / PERSONAL_SPACE;
+              const f = PERSONAL_SPACE_STRENGTH * push;
+              axArr[i] -= nx * f;
+              ayArr[i] -= ny * f;
+              axArr[j] += nx * f;
+              ayArr[j] += ny * f;
+            }
+
+            // Socialness force (wandering only)
+            if(!chasingArr[i] && !chasingArr[j] && d < SOCIAL_RANGE && d > SOCIAL_MIN){
+              const pairMood = (a.socialness + b.socialness) * 0.5;
+              const t = 1.0 - (d - SOCIAL_MIN) / (SOCIAL_RANGE - SOCIAL_MIN);
+              const f = SOCIAL_STRENGTH * pairMood * t;
+              axArr[i] += nx * f;
+              ayArr[i] += ny * f;
+              axArr[j] -= nx * f;
+              ayArr[j] -= ny * f;
+            }
+
+            // Light boids-like flocking (wandering only)
+            if(!chasingArr[i] && !chasingArr[j] && d < FLOCK_RANGE){
+              // Alignment: nudge velocities toward each other
+              const dvx = b.vx - a.vx;
+              const dvy = b.vy - a.vy;
+              const af = ALIGN_STRENGTH * 0.8;
+              axArr[i] += dvx * af;
+              ayArr[i] += dvy * af;
+              axArr[j] -= dvx * af;
+              ayArr[j] -= dvy * af;
+
+              // Cohesion: tiny pull toward midpoint
+              const cf = COHESION_STRENGTH * (1.0 - d / FLOCK_RANGE);
+              axArr[i] += nx * cf;
+              ayArr[i] += ny * cf;
+              axArr[j] -= nx * cf;
+              ayArr[j] -= ny * cf;
+            }
+          }
+        }
+
+        // Main movement
+        for(let i = squares.length - 1; i >= 0; i--){
+          const s = squares[i];
+          const targetSeed = targetSeedArr[i];
+          const chasing = chasingArr[i];
+          const panicking = panickingArr[i];
+          const fleeing = fleeingArr[i];
+
+          // Always compute shortest torus vector to target
+          const tv = torusDxDy(s.x, s.y, s.tx, s.ty);
+          const dx = tv.dx;
+          const dy = tv.dy;
+          const dist = Math.hypot(dx, dy);
+
+          // zigzag
+          s.zigzagPhase += dt * (s.zigzagFreq * Math.PI * 2) * (0.9 + 0.2 * Math.random());
+
+          // Base accel
+          let ax = axArr[i] + rand(-1, 1) * s.wander;
+          let ay = ayArr[i] + rand(-1, 1) * s.wander;
+
+          // Add coop avoidance force (but not when going to coop for rest)
+          if(s.restPhase !== 'going'){
+            const avoidForce = getCoopAvoidanceForce(s.x, s.y);
+            ax += avoidForce.x;
+            ay += avoidForce.y;
+          }
+
+          if(s.skidTimer > 0) s.skidTimer = Math.max(0, s.skidTimer - dt);
+
+          // Pecking slows and jitters a bit
+          const pecking = s.peckTimer > 0;
+
+          if(chasing){
+            const spNow = Math.hypot(s.vx, s.vy);
+
+            let speedCap = s.maxSpeed * 1.4;
+            if(panicking) speedCap *= PANIC_SPEED_MULT;
+            if(fleeing) speedCap *= FLEE_SPEED_MULT;
+            if(s.restPhase === 'going') speedCap *= 0.8; // tired chickens walk slowly to coop
+
+            if(s.skidTimer <= 0 && dist < SKID_TRIGGER && spNow > speedCap * 0.55){
+              s.skidTimer = rand(SKID_TIME_MIN, SKID_TIME_MAX);
+            }
+
+            const dirx = dist > 0.0001 ? (dx / dist) : 0;
+            const diry = dist > 0.0001 ? (dy / dist) : 0;
+            const px = -diry;
+            const py = dirx;
+            const zig = Math.sin(s.zigzagPhase);
+
+            const dvx = dirx * speedCap + px * zig * speedCap * ZIGZAG_AMP_CHASE;
+            const dvy = diry * speedCap + py * zig * speedCap * ZIGZAG_AMP_CHASE;
+
+            const steerMult = (s.skidTimer > 0) ? 0.40 : 1.0;
+            ax += (dvx - s.vx) * (CHASE_VEL_GAIN * s.chaseBoost * steerMult);
+            ay += (dvy - s.vy) * (CHASE_VEL_GAIN * s.chaseBoost * steerMult);
+
+            ax *= 0.40;
+            ay *= 0.40;
+
+          } else {
+            ax += (dx / Math.max(1, W)) * (s.centerPull * 220);
+            ay += (dy / Math.max(1, H)) * (s.centerPull * 220);
+
+            if(dist > 0.001){
+              const dirx = dx / dist;
+              const diry = dy / dist;
+              const px = -diry;
+              const py = dirx;
+              const zig = Math.sin(s.zigzagPhase);
+              ax += px * zig * s.wander * ZIGZAG_AMP_WANDER;
+              ay += py * zig * s.wander * ZIGZAG_AMP_WANDER;
+            }
+
+            if(Math.random() < s.impulseChance * dt){
+              ax += rand(-1, 1) * 240 * s.impulseScale;
+              ay += rand(-1, 1) * 240 * s.impulseScale;
+            }
+          }
+
+          const effectiveDamping = (chasing && s.skidTimer > 0) ? SKID_DAMPING : s.damping;
+          s.vx = (s.vx + ax * dt) * effectiveDamping;
+          s.vy = (s.vy + ay * dt) * effectiveDamping;
+
+          if(pecking){
+            s.vx *= PECK_SLOW;
+            s.vy *= PECK_SLOW;
+          }
+
+          const sp = Math.hypot(s.vx, s.vy);
+          let spCap = chasing ? (s.maxSpeed * 1.4) : s.maxSpeed;
+          if(panicking) spCap *= PANIC_SPEED_MULT;
+          if(fleeing) spCap *= FLEE_SPEED_MULT;
+          if(sp > spCap){
+            const k = spCap / sp;
+            s.vx *= k;
+            s.vy *= k;
+          }
+
+          const prevX = s.x;
+          const prevY = s.y;
+
+          s.x = wrapPos(s.x + s.vx * dt, W);
+          s.y = wrapPos(s.y + s.vy * dt, H);
+
+          // Proximity-based despawn for chickens going to coop
+          if(s.restPhase === 'going'){
+            const tv2 = torusDxDy(s.x, s.y, s.tx, s.ty);
+            const distToTarget = Math.hypot(tv2.dx, tv2.dy);
+            if(distToTarget < 6){
+              squares.splice(i, 1);
+              scheduleRespawn(s);
+              continue;
+            }
+          }
+
+          // Despawn zone check (backup)
+          if(isInDespawnZone(s.x, s.y)){
+            squares.splice(i, 1);
+            scheduleRespawn(s);
+            continue;
+          }
+
+          // Coop collision (walls block, doorway is open)
+          resolveCoopCollision(s);
+
+          // Safety: if chicken ends up inside coop body (should never happen), despawn immediately
+          if(coopBodyContains(s.x, s.y)){
+            squares.splice(i, 1);
+            scheduleRespawn(s);
+            continue;
+          }
+
+          // Eating + peck animation
+          if(targetSeed && targetSeed.landed){
+            const dd = torusDist(s.x, s.y, targetSeed.x, targetSeed.y);
+            if(dd <= EAT_RADIUS){
+              s.peckTimer = PECK_TIME;
+              targetSeed.amount -= (dt / Math.max(0.05, SEED_EAT_TIME)) * s.eatRate;
+              if(targetSeed.amount <= 0){
+                const idx = seeds.findIndex(v => v.id === targetSeed.id);
+                if(idx >= 0) seeds.splice(idx, 1);
+                s.seedId = null;
+              }
+            }
+          }
+        }
+
+        // Scatter: if many chickens converge on a seed, some seeds get kicked outward
+        if(seeds.length > 0){
+          for(const sd of seeds){
+            if(!sd.landed) continue;
+            let cnt = 0;
+            let ax = 0, ay = 0;
+            for(const ch of squares){
+              const v = torusDxDy(ch.x, ch.y, sd.x, sd.y);
+              const d = Math.hypot(v.dx, v.dy);
+              if(d <= SCATTER_RADIUS){
+                cnt++;
+                // accumulate chicken position relative to seed (to push away from crowd)
+                ax += -v.dx;
+                ay += -v.dy;
+              }
+            }
+            if(cnt >= SCATTER_MIN_CHICKENS && Math.random() < SCATTER_CHANCE_PER_SEC * dt){
+              // Direction: away from crowd centroid; if ambiguous, random
+              let nx = ax, ny = ay;
+              const mag = Math.hypot(nx, ny);
+              if(mag < 0.001){
+                const ang = rand(0, Math.PI * 2);
+                nx = Math.cos(ang);
+                ny = Math.sin(ang);
+              } else {
+                nx /= mag;
+                ny /= mag;
+              }
+              const imp = rand(SCATTER_IMPULSE_MIN, SCATTER_IMPULSE_MAX) * (0.65 + 0.12 * cnt);
+              sd.vx += nx * imp;
+              sd.vy += ny * imp;
+            }
+          }
+        }
+
+        // If a running chicken runs over (or near) another chicken, the other gets startled too.
+        for(let i = 0; i < squares.length; i++){
+          const a = squares[i];
+          const sa = Math.hypot(a.vx, a.vy);
+          for(let j = i + 1; j < squares.length; j++){
+            const b = squares[j];
+            const d = torusDist(a.x, a.y, b.x, b.y);
+            if(d > STARTLE_COLLISION_DIST) continue;
+
+            const sb = Math.hypot(b.vx, b.vy);
+            const aRunning = sa >= RUN_STARTLE_SPEED;
+            const bRunning = sb >= RUN_STARTLE_SPEED;
+
+            if(aRunning && !bRunning){
+              startleChicken(b, hasAnySeed);
+            } else if(bRunning && !aRunning){
+              startleChicken(a, hasAnySeed);
+            } else if(aRunning && bRunning){
+              startleChicken(a, hasAnySeed);
+              startleChicken(b, hasAnySeed);
+            }
+          }
+        }
+      }
+
+      function draw(){
+        ctx.fillStyle = GREEN;
+        ctx.fillRect(0, 0, W, H);
+
+        // Coop (obstacle with doorway)
+        drawCoop();
+
+
+        // Seeds
+        ctx.fillStyle = TAN;
+        for(const sd of seeds){
+          const x = Math.round(wrapPos(sd.x, W) - SEED_SIZE * 0.5);
+          const y = Math.round(sd.y - SEED_SIZE * 0.5);
+          // If seed y is above 0 (because it spawned above its ground), still draw it
+          ctx.fillRect(x, y, SEED_SIZE, SEED_SIZE);
+        }
+
+        // Feather puffs
+        ctx.fillStyle = 'rgba(255,255,255,0.8)';
+        for(const p of featherPuffs){
+          const a = Math.max(0, Math.min(1, p.life / p.life0));
+
+          if(p.type === 'down'){
+            ctx.fillStyle = `rgba(255,255,255,${0.75 * a})`;
+            const px = Math.round(p.x);
+            const py = Math.round(p.y);
+            ctx.fillRect(px, py, p.size * 2, 2); // made larger and square
+          } else {
+            // tan feather, a larger square rectangle
+            ctx.save();
+            ctx.translate(p.x, p.y);
+            ctx.rotate(p.ang);
+            ctx.fillStyle = `rgba(214,186,134,${0.85 * a})`;
+            ctx.fillRect(-p.size * 1.2, -1.6, p.size * 2.4, 2.4); // made larger and square
+            ctx.restore();
+          }  
+        }
+
+        // Chickens
+        for(const s of squares){
+          const half = s.size * 0.5;
+          let x = s.x - half;
+          let y = s.y - half;
+
+          // Peck visual jitter
+          if(s.peckTimer > 0){
+            x += rand(-PECK_JITTER, PECK_JITTER);
+            y += rand(-PECK_JITTER, PECK_JITTER);
+          }
+
+          const rx = Math.round(x);
+          const ry = Math.round(y);
+          const sz = Math.round(s.size);
+
+          ctx.fillStyle = WHITE;
+          ctx.fillRect(rx, ry, sz, sz);
+
+          
+          // Eye dot (one pixel) based on velocity direction
+          const sp = Math.hypot(s.vx, s.vy);
+          let ex = 1, ey = 0;
+          if(sp > 0.001){ ex = s.vx / sp; ey = s.vy / sp; }
+          const ox = Math.round(ex * (s.size * 0.22));
+          const oy = Math.round(ey * (s.size * 0.22));
+          s.eyeX = ox;
+          s.eyeY = oy;
+
+          const cxp = rx + Math.floor(sz * 0.5) + ox;
+          const cyp = ry + Math.floor(sz * 0.5) + oy;
+          ctx.fillStyle = BLACK;
+          ctx.fillRect(cxp, cyp, 1, 1);
+        }
+      }
+
+      let last = performance.now();
+      function loop(now){
+        const dt = clamp((now - last) / 1000, 0, 0.033);
+        last = now;
+        step(dt);
+        draw();
+        requestAnimationFrame(loop);
+      }
+
+      window.addEventListener('resize', () => {
+        resize();
+        const cx = W * 0.5, cy = H * 0.5;
+        for(const s of squares){
+          s.tx = wrapPos(cx + rand(-W * 0.30, W * 0.30), W);
+          s.ty = wrapPos(cy + rand(-H * 0.30, H * 0.30), H);
+          s.panicX = wrapPos(s.panicX, W);
+          s.panicY = wrapPos(s.panicY, H);
+          s.fleeX = wrapPos(s.fleeX, W);
+          s.fleeY = wrapPos(s.fleeY, H);
+          s.x = wrapPos(s.x, W);
+          s.y = wrapPos(s.y, H);
+        }
+        for(const sd of seeds){
+          sd.x = wrapPos(sd.x, W);
+          sd.y = sd.landed ? wrapPos(sd.y, H) : sd.y;
+          sd.groundY = wrapPos(sd.groundY, H);
+        }
+      });
+
+      function pointerToCanvasXY(evt){
+        const rect = canvas.getBoundingClientRect();
+        const px = evt.clientX - rect.left;
+        const py = evt.clientY - rect.top;
+        const x = clamp((px / Math.max(1, rect.width)) * W, 0, W);
+        const y = clamp((py / Math.max(1, rect.height)) * H, 0, H);
+        return { x, y };
+      }
+
+      canvas.addEventListener('pointerdown', (evt) => {
+        const { x, y } = pointerToCanvasXY(evt);
+        
+        // Hold to spread continuous seed stream
+        if (evt.buttons === 1 || evt.buttons === 2 || evt.buttons === 4) {
+          dropSeedAt(x, y);
+        }
+      });
+      
+      canvas.addEventListener('pointermove', (evt) => {
+        if (evt.buttons === 1 || evt.buttons === 2 || evt.buttons === 4) {
+          const { x, y } = pointerToCanvasXY(evt);
+          dropSeedAt(x, y);
+        }
+      });
+
+      // Boot
+      resize();
+      computeCoop();
+      init();
+      runTests();
+      requestAnimationFrame(loop);
+    })();
+  </script>
+</body>
+</html>
