@@ -96,16 +96,21 @@ function resize(state) {
   const canvas = document.getElementById('c');
   const dpr = window.devicePixelRatio || 1;
   
-  canvas.width = window.innerWidth * dpr;
-  canvas.height = window.innerHeight * dpr;
-  
-  canvas.style.width = window.innerWidth + 'px';
-  canvas.style.height = window.innerHeight + 'px';
-  
-  // Update state with new dimensions
+  // Set canvas size to logical dimensions
   state.canvas.width = window.innerWidth;
   state.canvas.height = window.innerHeight;
   state.canvas.dpr = dpr;
+  
+  // Set actual canvas pixel dimensions
+  canvas.width = state.canvas.width * dpr;
+  canvas.height = state.canvas.height * dpr;
+  
+  // Set display size
+  canvas.style.width = state.canvas.width + 'px';
+  canvas.style.height = state.canvas.height + 'px';
+  
+  // Scale drawing context to match device pixel ratio
+  ctx.scale(dpr, dpr);
 }
 
 function init(state) {
@@ -164,6 +169,8 @@ function pointerToCanvasXY(evt, state) {
   });
 
   window.addEventListener('resize', () => {
+    // Reset context transform before resizing
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
     resize(state);
     const cx = state.canvas.width * 0.5, cy = state.canvas.height * 0.5;
     for (const s of state.chickens) {
