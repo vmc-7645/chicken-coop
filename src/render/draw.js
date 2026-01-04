@@ -53,8 +53,35 @@ coopImg.onerror = () => {
 
 coopImg.src = 'src/assets/coop.png';
 
-// Dust particle system
+// Dust particle system with object pooling
 let dustParticles = [];
+const dustPool = [];
+const maxPoolSize = 100;
+
+// Get dust particle from pool or create new one
+function getDustParticle(x, y, vx, vy, size, life, maxLife) {
+  let particle;
+  if (dustPool.length > 0) {
+    particle = dustPool.pop();
+    particle.x = x;
+    particle.y = y;
+    particle.vx = vx;
+    particle.vy = vy;
+    particle.size = size;
+    particle.life = life;
+    particle.maxLife = maxLife;
+  } else {
+    particle = { x, y, vx, vy, size, life, maxLife };
+  }
+  return particle;
+}
+
+// Return dust particle to pool
+function returnDustParticle(particle) {
+  if (dustPool.length < maxPoolSize) {
+    dustPool.push(particle);
+  }
+}
 
 export function draw(state, ctx) {
   // Update grass animation time
@@ -109,18 +136,26 @@ function drawBackground(state, ctx) {
       // Calculate wind effect
       const windStrength = Math.sin(grassTime * 2 + patch.x * 0.01) * 0.15;
       
-      // Calculate chicken interaction effect
+      // Optimized chicken interaction effect with spatial partitioning
       let chickenEffect = 0;
+      const interactionRadius = 60;
+      
+      // Only check chickens within interaction radius
       for (const chicken of state.chickens) {
         const dx = chicken.x - patch.x;
         const dy = chicken.y - patch.y;
-        const distance = Math.hypot(dx, dy);
-        const chickenSpeed = Math.hypot(chicken.vx, chicken.vy);
+        const distSq = dx * dx + dy * dy;
+        const radiusSq = interactionRadius * interactionRadius;
         
-        // Chicken affects grass when nearby and moving fast
-        if (distance < 60 && chickenSpeed > 50) {
-          const influence = (1 - distance / 60) * (chickenSpeed / 200);
-          chickenEffect += influence * Math.sign(dx);
+        if (distSq < radiusSq) {
+          const distance = Math.sqrt(distSq);
+          const chickenSpeedSq = chicken.vx * chicken.vx + chicken.vy * chicken.vy;
+          
+          // Chicken affects grass when nearby and moving fast
+          if (chickenSpeedSq > 2500) { // 50^2
+            const influence = (1 - distance / interactionRadius) * (Math.sqrt(chickenSpeedSq) / 200);
+            chickenEffect += influence * Math.sign(dx);
+          }
         }
       }
       
@@ -214,10 +249,10 @@ function drawChickens(state, ctx) {
     // Flip chicken horizontally to face right direction
     ctx.translate(rx + sz/2, ry + sz/2);
     
-    // Determine if chicken should be flipped based on velocity
-    const sp = Math.hypot(s.vx, s.vy);
+    // Determine if chicken should be flipped based on velocity (optimized)
+    const speedSq = s.vx * s.vx + s.vy * s.vy;
     let facingRight = true;
-    if (sp > 0.001) {
+    if (speedSq > 0.000001) { // 0.001^2
       // Chicken should face the direction it's moving
       facingRight = s.vx >= 0;
     }
@@ -226,20 +261,27 @@ function drawChickens(state, ctx) {
       ctx.scale(-1, 1);
     }
     
-    // Generate dust particles if moving quickly
-    const speed = Math.hypot(s.vx, s.vy);
-    if (speed > 100 && Math.random() < 0.3) {
-      // Create dust cloud behind chicken
+    // Add pecking rotation animation when eating
+    if (s.peckTimer > 0) {
+      const peckProgress = 1 - (s.peckTimer / CFG.PECK_TIME);
+      const peckAngle = Math.sin(peckProgress * Math.PI * 2) * (Math.PI / 2); // 90 degrees rotation
+      ctx.rotate(peckAngle);
+    }
+    
+    // Generate dust particles if moving quickly (optimized speed calculation)
+    if (speedSq > 10000 && Math.random() < 0.3) { // 100^2
+      const speed = Math.sqrt(speedSq);
+      // Create dust cloud behind chicken using object pooling
       for (let i = 0; i < 2; i++) {
-        dustParticles.push({
-          x: s.x - s.vx * 0.02 + rand(-4, 4),
-          y: s.y - s.vy * 0.02 + rand(-2, 2),
-          vx: rand(-20, 20) - s.vx * 0.1,
-          vy: rand(-30, -10),
-          size: rand(2, 4),
-          life: rand(0.3, 0.8),
-          maxLife: rand(0.3, 0.8)
-        });
+        dustParticles.push(getDustParticle(
+          s.x - s.vx * 0.02 + rand(-4, 4),
+          s.y - s.vy * 0.02 + rand(-2, 2),
+          rand(-20, 20) - s.vx * 0.1,
+          rand(-30, -10),
+          rand(2, 4),
+          rand(0.3, 0.8),
+          rand(0.3, 0.8)
+        ));
       }
     }
 
@@ -290,9 +332,10 @@ function drawDust(state, ctx) {
     dust.vx *= 0.98; // Air resistance
     dust.life -= dt;
     
-    // Remove dead particles
+    // Remove dead particles and return to pool
     if (dust.life <= 0) {
       dustParticles.splice(i, 1);
+      returnDustParticle(dust);
       continue;
     }
     
@@ -303,35 +346,64 @@ function drawDust(state, ctx) {
   }
 }
 
+// Performance optimization: cache offscreen canvas for pixel filter
+let offscreenCanvas = null;
+let offscreenCtx = null;
+
 function applyPixelFilter(state, ctx) {
   const pixelSize = 4; // How much to pixelate (higher = more pixelated)
   const { width, height } = state.canvas;
   
-  // Get the current canvas image data
-  const imageData = ctx.getImageData(0, 0, width, height);
+  // Create or reuse offscreen canvas
+  if (!offscreenCanvas || offscreenCanvas.width !== width || offscreenCanvas.height !== height) {
+    offscreenCanvas = document.createElement('canvas');
+    offscreenCanvas.width = width;
+    offscreenCanvas.height = height;
+    offscreenCtx = offscreenCanvas.getContext('2d');
+  }
+  
+  // Copy current canvas to offscreen
+  offscreenCtx.drawImage(ctx.canvas, 0, 0);
+  
+  // Get image data from offscreen canvas
+  const imageData = offscreenCtx.getImageData(0, 0, width, height);
   const data = imageData.data;
   
-  // Create a pixelated effect using mean color of each block
-  // Optimized: pre-calculate indices and use single loop
-  const pixelCount = Math.floor(width / pixelSize) * Math.floor(height / pixelSize);
-  const blockArea = pixelSize * pixelSize;
+  // Optimized pixelation: use lookup tables and reduce calculations
+  const pixelWidth = Math.floor(width / pixelSize);
+  const pixelHeight = Math.floor(height / pixelSize);
   
-  for (let y = 0; y < height; y += pixelSize) {
-    for (let x = 0; x < width; x += pixelSize) {
+  // Pre-calculate pixel boundaries
+  const xBounds = new Array(pixelWidth + 1);
+  const yBounds = new Array(pixelHeight + 1);
+  for (let i = 0; i <= pixelWidth; i++) {
+    xBounds[i] = Math.min(i * pixelSize, width);
+  }
+  for (let i = 0; i <= pixelHeight; i++) {
+    yBounds[i] = Math.min(i * pixelSize, height);
+  }
+  
+  // Process pixels in blocks
+  for (let py = 0; py < pixelHeight; py++) {
+    const yStart = yBounds[py];
+    const yEnd = yBounds[py + 1];
+    
+    for (let px = 0; px < pixelWidth; px++) {
+      const xStart = xBounds[px];
+      const xEnd = xBounds[px + 1];
+      
+      // Calculate mean color for this block
       let r = 0, g = 0, b = 0, a = 0;
       let count = 0;
       
-      // Calculate the mean color of this pixel block
-      const maxY = Math.min(y + pixelSize, height);
-      const maxX = Math.min(x + pixelSize, width);
-      
-      for (let dy = y; dy < maxY; dy++) {
-        for (let dx = x; dx < maxX; dx++) {
-          const sourceIndex = (dy * width + dx) * 4;
-          r += data[sourceIndex];
-          g += data[sourceIndex + 1];
-          b += data[sourceIndex + 2];
-          a += data[sourceIndex + 3];
+      for (let y = yStart; y < yEnd; y++) {
+        const rowOffset = y * width * 4;
+        for (let x = xStart; x < xEnd; x++) {
+          const idx = rowOffset + x * 4;
+          r += data[idx];
+          g += data[idx + 1];
+          b += data[idx + 2];
+          a += data[idx + 3];
           count++;
         }
       }
@@ -343,21 +415,25 @@ function applyPixelFilter(state, ctx) {
       b = Math.round(b * invCount);
       a = Math.round(a * invCount);
       
-      // Fill the entire pixel block with the mean color
-      for (let dy = y; dy < maxY; dy++) {
-        for (let dx = x; dx < maxX; dx++) {
-          const targetIndex = (dy * width + dx) * 4;
-          data[targetIndex] = r;
-          data[targetIndex + 1] = g;
-          data[targetIndex + 2] = b;
-          data[targetIndex + 3] = a;
+      // Fill the block with average color
+      for (let y = yStart; y < yEnd; y++) {
+        const rowOffset = y * width * 4;
+        for (let x = xStart; x < xEnd; x++) {
+          const idx = rowOffset + x * 4;
+          data[idx] = r;
+          data[idx + 1] = g;
+          data[idx + 2] = b;
+          data[idx + 3] = a;
         }
       }
     }
   }
   
-  // Put the modified image data back
-  ctx.putImageData(imageData, 0, 0);
+  // Put the modified image data back to offscreen canvas
+  offscreenCtx.putImageData(imageData, 0, 0);
+  
+  // Draw the result back to main canvas
+  ctx.drawImage(offscreenCanvas, 0, 0);
   
   // Apply sharpening filter
   applySharpenFilter(state, ctx);

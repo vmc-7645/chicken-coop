@@ -21,3 +21,8 @@ export function torusDist(ax, ay, bx, by, W, H) {
   const v = torusDxDy(ax, ay, bx, by, W, H);
   return Math.hypot(v.dx, v.dy);
 }
+
+export function torusDistSq(ax, ay, bx, by, W, H) {
+  const v = torusDxDy(ax, ay, bx, by, W, H);
+  return v.dx * v.dx + v.dy * v.dy;
+}

@@ -1,7 +1,7 @@
 import { CFG } from "../config.js";
 import { rand } from "../util/rand.js";
 import { clamp, norm2 } from "../util/math2d.js";
-import { wrapPos, torusDist, torusDxDy } from "../util/torus.js";
+import { wrapPos, torusDist, torusDistSq, torusDxDy } from "../util/torus.js";
 import { 
   startleChicken, 
   triggerPanic, 
@@ -374,19 +374,21 @@ function updateSocialForces(state, chasingArr, axArr, ayArr) {
       const v = torusDxDy(a.x, a.y, b.x, b.y, W, H);
       let dx = v.dx;
       let dy = v.dy;
-      let d = Math.hypot(dx, dy);
-      if (d < 0.0001) {
+      let dSq = dx * dx + dy * dy;
+      if (dSq < 0.00000001) {
         dx = rand(-1,1);
         dy = rand(-1,1);
-        d = Math.hypot(dx, dy);
+        dSq = dx * dx + dy * dy;
       }
+      const d = Math.sqrt(dSq);
       const nx = dx / d;
       const ny = dy / d;
 
       // Hard separation
-      const sepDist = chasingPair ? CFG.SEPARATION_DIST_CHASE : CFG.SEPARATION_DIST_WANDER;
+      const sepDistSq = chasingPair ? CFG.SEPARATION_DIST_CHASE * CFG.SEPARATION_DIST_CHASE : CFG.SEPARATION_DIST_WANDER * CFG.SEPARATION_DIST_WANDER;
+      const sepDist = Math.sqrt(sepDistSq);
       const sepStrength = chasingPair ? CFG.SEPARATION_STRENGTH_CHASE : CFG.SEPARATION_STRENGTH_WANDER;
-      if (d < sepDist) {
+      if (dSq < sepDistSq) {
         const push = (sepDist - d) / sepDist;
         const f = sepStrength * push;
         axArr[i] -= nx * f;
@@ -397,7 +399,8 @@ function updateSocialForces(state, chasingArr, axArr, ayArr) {
       }
 
       // Soft personal space bubble (wandering only)
-      if (!chasingArr[i] && !chasingArr[j] && d < CFG.PERSONAL_SPACE) {
+      const personalSpaceSq = CFG.PERSONAL_SPACE * CFG.PERSONAL_SPACE;
+      if (!chasingArr[i] && !chasingArr[j] && dSq < personalSpaceSq) {
         const push = (CFG.PERSONAL_SPACE - d) / CFG.PERSONAL_SPACE;
         const f = CFG.PERSONAL_SPACE_STRENGTH * push;
         axArr[i] -= nx * f;
@@ -407,7 +410,9 @@ function updateSocialForces(state, chasingArr, axArr, ayArr) {
       }
 
       // Socialness force (wandering only)
-      if (!chasingArr[i] && !chasingArr[j] && d < CFG.SOCIAL_RANGE && d > CFG.SOCIAL_MIN) {
+      const socialMinSq = CFG.SOCIAL_MIN * CFG.SOCIAL_MIN;
+      const socialRangeSq = CFG.SOCIAL_RANGE * CFG.SOCIAL_RANGE;
+      if (!chasingArr[i] && !chasingArr[j] && dSq < socialRangeSq && dSq > socialMinSq) {
         const pairMood = (a.socialness + b.socialness) * 0.5;
         const t = 1.0 - (d - CFG.SOCIAL_MIN) / (CFG.SOCIAL_RANGE - CFG.SOCIAL_MIN);
         const f = CFG.SOCIAL_STRENGTH * pairMood * t;
@@ -418,7 +423,8 @@ function updateSocialForces(state, chasingArr, axArr, ayArr) {
       }
 
       // Light boids-like flocking (wandering only)
-      if (!chasingArr[i] && !chasingArr[j] && d < CFG.FLOCK_RANGE) {
+      const flockRangeSq = CFG.FLOCK_RANGE * CFG.FLOCK_RANGE;
+      if (!chasingArr[i] && !chasingArr[j] && dSq < flockRangeSq) {
         // Alignment: nudge velocities toward each other
         const dvx = b.vx - a.vx;
         const dvy = b.vy - a.vy;
@@ -544,7 +550,8 @@ function updateMovement(state, dt, axArr, ayArr, chasingArr, panickingArr, fleei
     const tv = torusDxDy(s.x, s.y, s.tx, s.ty, W, H);
     const dx = tv.dx;
     const dy = tv.dy;
-    const dist = Math.hypot(dx, dy);
+    const distSq = dx * dx + dy * dy;
+    const dist = Math.sqrt(distSq);
 
     // zigzag
     s.zigzagPhase += dt * (s.zigzagFreq * Math.PI * 2) * (0.9 + 0.2 * Math.random());
@@ -566,19 +573,21 @@ function updateMovement(state, dt, axArr, ayArr, chasingArr, panickingArr, fleei
     const pecking = s.peckTimer > 0;
 
     if (chasing) {
-      const spNow = Math.hypot(s.vx, s.vy);
+      const spSq = s.vx * s.vx + s.vy * s.vy;
+      const spNow = Math.sqrt(spSq);
 
       let speedCap = s.maxSpeed * 1.4;
       if (panicking) speedCap *= CFG.PANIC_SPEED_MULT;
       if (fleeing) speedCap *= CFG.FLEE_SPEED_MULT;
       if (s.restPhase === 'going') speedCap *= 0.8; // tired chickens walk slowly to coop
+      const speedCapSq = speedCap * speedCap;
 
-      if (s.skidTimer <= 0 && dist < CFG.SKID_TRIGGER && spNow > speedCap * 0.55) {
+      if (s.skidTimer <= 0 && distSq < CFG.SKID_TRIGGER * CFG.SKID_TRIGGER && spSq > speedCapSq * 0.3025) { // 0.55^2
         s.skidTimer = rand(CFG.SKID_TIME_MIN, CFG.SKID_TIME_MAX);
       }
 
-      const dirx = dist > 0.0001 ? (dx / dist) : 0;
-      const diry = dist > 0.0001 ? (dy / dist) : 0;
+      const dirx = distSq > 0.000001 ? (dx / dist) : 0;
+      const diry = distSq > 0.000001 ? (dy / dist) : 0;
       const px = -diry;
       const py = dirx;
       const zig = Math.sin(s.zigzagPhase);
@@ -597,7 +606,7 @@ function updateMovement(state, dt, axArr, ayArr, chasingArr, panickingArr, fleei
       ax += (dx / Math.max(1, W)) * (s.centerPull * 220);
       ay += (dy / Math.max(1, H)) * (s.centerPull * 220);
 
-      if (dist > 0.001) {
+      if (distSq > 0.000001) {
         const dirx = dx / dist;
         const diry = dy / dist;
         const px = -diry;
@@ -622,12 +631,13 @@ function updateMovement(state, dt, axArr, ayArr, chasingArr, panickingArr, fleei
       s.vy *= CFG.PECK_SLOW;
     }
 
-    const sp = Math.hypot(s.vx, s.vy);
+    const spSq = s.vx * s.vx + s.vy * s.vy;
     let spCap = chasing ? (s.maxSpeed * 1.4) : s.maxSpeed;
     if (panicking) spCap *= CFG.PANIC_SPEED_MULT;
     if (fleeing) spCap *= CFG.FLEE_SPEED_MULT;
-    if (sp > spCap) {
-      const k = spCap / sp;
+    const spCapSq = spCap * spCap;
+    if (spSq > spCapSq) {
+      const k = spCap / Math.sqrt(spSq);
       s.vx *= k;
       s.vy *= k;
     }
@@ -641,8 +651,8 @@ function updateMovement(state, dt, axArr, ayArr, chasingArr, panickingArr, fleei
     // Proximity-based despawn for chickens going to coop
     if (s.restPhase === 'going') {
       const tv2 = torusDxDy(s.x, s.y, s.tx, s.ty, W, H);
-      const distToTarget = Math.hypot(tv2.dx, tv2.dy);
-      if (distToTarget < 6) {
+      const distToTargetSq = tv2.dx * tv2.dx + tv2.dy * tv2.dy;
+      if (distToTargetSq < 36) { // 6^2
         chickens.splice(i, 1);
         scheduleRespawn(state, s);
         continue;
@@ -668,8 +678,9 @@ function updateMovement(state, dt, axArr, ayArr, chasingArr, panickingArr, fleei
 
     // Eating + peck animation
     if (targetSeed && targetSeed.landed) {
-      const dd = torusDist(s.x, s.y, targetSeed.x, targetSeed.y, W, H);
-      if (dd <= CFG.EAT_RADIUS) {
+      const ddSq = torusDistSq(s.x, s.y, targetSeed.x, targetSeed.y, W, H);
+      const eatRadiusSq = CFG.EAT_RADIUS * CFG.EAT_RADIUS;
+      if (ddSq <= eatRadiusSq) {
         s.peckTimer = CFG.PECK_TIME;
         targetSeed.amount -= (dt / Math.max(0.05, CFG.SEED_EAT_TIME)) * s.eatRate;
         if (targetSeed.amount <= 0) {

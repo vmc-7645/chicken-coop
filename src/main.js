@@ -13,9 +13,9 @@ function assert(cond, msg) {
   if (!cond) throw new Error('Test failed: ' + msg);
 }
 
-function runTests(state) {
+function runTests(state, ctx) {
   try {
-    resize(state);
+    resize(state, ctx);
     assert(state.canvas.width > 0 && state.canvas.height > 0, 'resize sets positive W/H');
     console.log('Canvas dimensions:', { width: state.canvas.width, height: state.canvas.height });
 
@@ -92,7 +92,7 @@ function step(state, dt) {
   updateFeathers(state, dt);
 }
 
-function resize(state) {
+function resize(state, ctx) {
   const canvas = document.getElementById('c');
   const dpr = window.devicePixelRatio || 1;
   
@@ -145,10 +145,10 @@ function pointerToCanvasXY(evt, state) {
   const state = createState();
   
   // Initialize
-  resize(state);
+  resize(state, ctx);
   placeCoop(state);
   init(state);
-  runTests(state);
+  runTests(state, ctx);
 
   // Input handlers
   canvas.addEventListener('pointerdown', (evt) => {
@@ -171,7 +171,7 @@ function pointerToCanvasXY(evt, state) {
   window.addEventListener('resize', () => {
     // Reset context transform before resizing
     ctx.setTransform(1, 0, 0, 1, 0, 0);
-    resize(state);
+    resize(state, ctx);
     const cx = state.canvas.width * 0.5, cy = state.canvas.height * 0.5;
     for (const s of state.chickens) {
       s.tx = s.tx % state.canvas.width;

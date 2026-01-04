@@ -39,7 +39,7 @@ export const CFG = {
   SEED_SPREAD: 26,
   GRAVITY: 1200,
   SEED_EAT_TIME: 1.0,
-  EAT_RADIUS: 14,
+  EAT_RADIUS: 24,
 
   // Seed polish
   SEED_CLUSTERS: 3,
@@ -49,9 +49,9 @@ export const CFG = {
   PECK_JITTER: 0.80,
 
   // Wander feel
-  CENTER_PULL: 0.14,
-  WANDER: 3.5,
-  DAMPING: 0.90,
+  CENTER_PULL: 0.1,
+  WANDER: 5.5,
+  DAMPING: 0.70,
   MAX_SPEED: 650,
 
   // Impulses
